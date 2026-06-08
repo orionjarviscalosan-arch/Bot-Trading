@@ -27,6 +27,16 @@ def symbol_base_asset(symbol: str) -> str:
     """Extrae el activo base de un par CCXT, p.ej. BTC/USDT → BTC."""
     return symbol.split("/")[0]
 
+
+def timeframe_to_timedelta(timeframe: str) -> pd.Timedelta:
+    """Convierte timeframe CCXT a Timedelta pandas (evita ambigüedad de 'm')."""
+    mapping = {
+        "1m": "1min", "3m": "3min", "5m": "5min", "15m": "15min",
+        "30m": "30min", "1h": "1h", "2h": "2h", "4h": "4h",
+        "6h": "6h", "8h": "8h", "12h": "12h", "1d": "1d",
+    }
+    return pd.Timedelta(mapping.get(timeframe, timeframe))
+
 def fetch_ohlcv(symbol: str, timeframe: str, limit: int = CANDLES_LB) -> pd.DataFrame:
     """
     Descarga velas OHLCV confirmadas (excluye la vela actual en formación).
@@ -45,7 +55,7 @@ def fetch_ohlcv(symbol: str, timeframe: str, limit: int = CANDLES_LB) -> pd.Data
             df = df.astype(float)
 
             now_utc = datetime.now(timezone.utc)
-            if len(df) > 0 and df.index[-1] >= now_utc - pd.Timedelta(timeframe):
+            if len(df) > 0 and df.index[-1] >= now_utc - timeframe_to_timedelta(timeframe):
                 df = df.iloc[:-1]
 
             return df

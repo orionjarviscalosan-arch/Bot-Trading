@@ -18,8 +18,8 @@ TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "")
 BOT_MODE = os.getenv("BOT_MODE", "shadow")
 
 # ── ESTILO DE TRADING ────────────────────────────────────
-# scalper | day_trader | swing — autoajusta timeframe y parámetros
-TRADING_STYLE = normalize_style(os.getenv("TRADING_STYLE", "swing"))
+# ultra_1m | micro_5m | scalper | day_trader | swing — autoajusta timeframe e indicadores
+TRADING_STYLE = normalize_style(os.getenv("TRADING_STYLE", "micro_5m"))
 _style_cfg = get_style_config(TRADING_STYLE)
 
 # ── PAR Y TIMEFRAME (derivados del estilo) ───────────────

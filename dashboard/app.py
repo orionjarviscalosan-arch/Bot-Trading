@@ -283,7 +283,7 @@ def main():
             marker = "▶ " if key == active_style else "  "
             st.caption(f"{marker}**{sc['label']}** — {sc['timeframe']} / HTF {sc['htf']}")
         st.caption(
-            "Cambiar estilo/modo: envía comandos al bot en Telegram (/ayuda)."
+            "Cambiar timeframe: Telegram → /1m /5m /15m /day /swing (/tiempo para ver todos)."
         )
 
         st.divider()

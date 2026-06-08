@@ -386,7 +386,7 @@ def compute_all(df_4h: pd.DataFrame, df_1d: pd.DataFrame,
     df_1d: DataFrame 1D con OHLCV
     params: parámetros activos del SIGNAL_PARAMS
     """
-    if len(df_4h) < 200 or len(df_1d) < 50:
+    if len(df_4h) < p.get("min_ltf_bars", 200) or len(df_1d) < p.get("min_htf_bars", 50):
         raise ValueError("Datos insuficientes para calcular indicadores")
 
     p = params
@@ -457,7 +457,7 @@ def compute_all(df_4h: pd.DataFrame, df_1d: pd.DataFrame,
     current_price = float(df_4h["close"].iloc[-1])
     trail_level   = float(df_4h["trail_level"].iloc[-1])
     atr_val       = float(atr_4h.iloc[-1])
-    sl_buffer     = 0.2
+    sl_buffer     = p.get("sl_buffer", 0.2)
 
     long_sl  = trail_level - atr_val * sl_buffer
     long_tp  = current_price + (current_price - long_sl) * p["rr_ratio"]
@@ -489,6 +489,8 @@ def get_signal(state: dict, params: dict, last_long_bar: int,
     p        = params
     threshold = p["score_threshold"]
     cd_bars   = p["cooldown_bars"]
+    bull_margin = p.get("score_bull_margin", 10)
+    momentum_min = p.get("momentum_min", -0.5)
 
     bull = sc["score_bull"]
     bear = sc["score_bear"]
@@ -499,12 +501,12 @@ def get_signal(state: dict, params: dict, last_long_bar: int,
     # Señal de ENTRADA LONG
     long_signal = (
         bull >= threshold
-        and bull > bear + 10
+        and bull > bear + bull_margin
         and sc["htf_bull"]
         and sc["struct_bias"] == 1
         and (sc["bull_choch_recent"] or
              (sc["bull_bos_recent"] and sc["bull_zone_near"]))
-        and sc["momentum_raw"] > -0.5
+        and sc["momentum_raw"] > momentum_min
         and sc["regime_ok"]
         and sc["trail_dir"] == 1
         and cooldown_ok

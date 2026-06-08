@@ -3,8 +3,9 @@ scheduler_utils.py — Mapeo de timeframe a triggers del scheduler
 """
 from apscheduler.triggers.cron import CronTrigger
 
-# Ejecutar 1 minuto después del cierre de vela (UTC)
+# Ejecutar tras el cierre de vela (UTC). 1m evalúa cada minuto.
 _TIMEFRAME_CRON = {
+    "1m":  {"hour": "*", "minute": "*"},
     "5m":  {"hour": "*", "minute": "1,6,11,16,21,26,31,36,41,46,51,56"},
     "15m": {"hour": "*", "minute": "1,16,31,46"},
     "30m": {"hour": "*", "minute": "1,31"},

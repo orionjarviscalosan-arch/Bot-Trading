@@ -11,7 +11,7 @@ import config as cfg
 from bot.database import get_state, set_state, save_param_set, get_active_params
 from bot.trading_styles import (
     normalize_style, get_style_config, apply_style_to_signal_params,
-    STYLE_LABELS, VALID_STYLES,
+    STYLE_LABELS, VALID_STYLES, list_styles_summary,
 )
 from bot.pairs import bar_state_keys
 from bot.scheduler_utils import candle_close_trigger, candle_close_description
@@ -151,7 +151,10 @@ def apply_style(style: str) -> str:
         f"✅ Estilo cambiado\n"
         f"<b>{old_label}</b> → <b>{_runtime.label}</b>\n"
         f"Timeframe: <b>{_runtime.timeframe}</b> · HTF {_runtime.htf}\n"
-        f"Próxima evaluación al cierre de vela { _runtime.timeframe}."
+        f"Score ≥ {_runtime.signal_params['score_threshold']} · "
+        f"R:R {_runtime.signal_params['rr_ratio']} · "
+        f"Cooldown {_runtime.signal_params['cooldown_bars']} velas\n"
+        f"Próxima evaluación al cierre de vela {_runtime.timeframe}."
     )
 
 
@@ -254,17 +257,20 @@ def get_pairs_message() -> str:
 def get_help_message() -> str:
     return (
         "🤖 <b>Nextwaves Bot — Comandos</b>\n\n"
-        "<b>Estilo de trading</b>\n"
-        "/scalper — operaciones rápidas (15m)\n"
-        "/daytrader — intradía (1h)\n"
+        "<b>Timeframe (autoajusta indicadores)</b>\n"
+        "/1m — ultra scalping (1 min)\n"
+        "/5m — micro scalping (5 min)\n"
+        "/15m o /scalper — scalper (15 min)\n"
+        "/day — intradía (1h)\n"
         "/swing — posiciones largas (4h)\n"
-        "/estilo — estilo actual\n\n"
+        "/tiempo — ver todos los modos\n"
+        "/estilo — estilo activo\n\n"
         "<b>Modo de ejecución</b>\n"
         "/shadow — simulación (sin dinero)\n"
         "/paper — paper trading\n"
         "/live confirmar — dinero real ⚠️\n\n"
         "<b>Info</b>\n"
-        "/estado — resumen completo\n"
         "/pares — posiciones por par\n"
+        "/estado — resumen completo\n"
         "/ayuda — este mensaje"
     )

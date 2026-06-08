@@ -14,10 +14,17 @@ from bot.style_runtime import (
 logger = logging.getLogger(__name__)
 
 _STYLE_COMMANDS = {
+    "/1m":         "ultra_1m",
+    "/ultra":      "ultra_1m",
+    "/5m":         "micro_5m",
+    "/micro":      "micro_5m",
+    "/15m":        "scalper",
     "/scalper":    "scalper",
     "/daytrader":  "day_trader",
     "/day":        "day_trader",
     "/swing":      "swing",
+    "/1h":         "day_trader",
+    "/4h":         "swing",
 }
 
 _MODE_COMMANDS = {
@@ -71,11 +78,25 @@ def _handle_command(chat_id: str, text: str) -> str | None:
 
     if cmd == "/estilo":
         from bot.style_runtime import get_runtime
+        from bot.trading_styles import list_styles_summary
         rt = get_runtime()
         return (
             f"Estilo activo: <b>{rt.label}</b>\n"
-            f"Timeframe: {rt.timeframe} · HTF {rt.htf}\n"
-            f"Modo: <b>{rt.bot_mode.upper()}</b>"
+            f"Timeframe: <b>{rt.timeframe}</b> · HTF {rt.htf}\n"
+            f"Modo: <b>{rt.bot_mode.upper()}</b>\n\n"
+            f"<b>Estilos disponibles:</b>\n{list_styles_summary()}"
+        )
+
+    if cmd == "/tiempo":
+        from bot.trading_styles import list_styles_summary
+        from bot.style_runtime import get_runtime
+        rt = get_runtime()
+        return (
+            f"⏱ <b>Timeframes</b> (activo: <b>{rt.label}</b> · {rt.timeframe})\n\n"
+            f"{list_styles_summary()}\n\n"
+            "Cambia con:\n"
+            "<code>/1m</code> · <code>/5m</code> · <code>/15m</code>\n"
+            "<code>/day</code> · <code>/swing</code>"
         )
 
     if cmd in _STYLE_COMMANDS:

@@ -23,7 +23,7 @@ def validate_startup() -> list[str]:
     if cfg.TRADING_STYLE not in VALID_STYLES:
         errors.append(
             f"TRADING_STYLE inválido: '{cfg.TRADING_STYLE}'. "
-            f"Usa: scalper | day_trader | swing")
+            f"Usa: ultra_1m | micro_5m | scalper | day_trader | swing")
 
     if not cfg.TRADING_PAIRS:
         errors.append("TRADING_PAIRS está vacío — define al menos un par")
