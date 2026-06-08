@@ -1,0 +1,15 @@
+[server]
+headless = true
+enableCORS = false
+# Mantener conexión viva en móvil / Tailscale
+websocketPingInterval = 20
+websocketPingTimeout = 120
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[runner]
+fastReruns = true

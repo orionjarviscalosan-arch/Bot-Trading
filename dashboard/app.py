@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import config as cfg
+from dashboard.auth import check_auth, get_cookie_manager, clear_session
 from bot.trading_styles import TRADING_STYLES, STYLE_LABELS
 from bot.dashboard_data import (
     get_trades_df, get_closed_trades_df, get_open_trades_df,
@@ -36,23 +37,6 @@ EXIT_LABELS = {
     "score_bear": "Score bajista",
     "manual": "Manual",
 }
-
-
-def check_auth():
-    password = os.getenv("DASHBOARD_PASSWORD", "")
-    if not password:
-        return True
-    if st.session_state.get("authenticated"):
-        return True
-    st.title("Nextwaves Bot Dashboard")
-    entered = st.text_input("Contraseña del dashboard", type="password")
-    if st.button("Entrar"):
-        if entered == password:
-            st.session_state["authenticated"] = True
-            st.rerun()
-        else:
-            st.error("Contraseña incorrecta")
-    return False
 
 
 def fmt_usdt(v):
@@ -100,6 +84,11 @@ def main():
             )
         if st.button("Actualizar ahora"):
             st.rerun()
+
+        if os.getenv("DASHBOARD_PASSWORD"):
+            if st.button("Cerrar sesión"):
+                clear_session(get_cookie_manager())
+                st.rerun()
 
         st.divider()
         st.markdown("**Estilos disponibles**")
