@@ -176,7 +176,7 @@ def save_param_set(params: dict, source="initial", metrics=None):
     metrics = metrics or {}
     with get_conn() as conn:
         conn.execute("UPDATE param_sets SET active = FALSE WHERE active = TRUE")
-        conn.execute("""
+        cur = conn.execute("""
             INSERT INTO param_sets
             (params, source, profit_factor, win_rate, calmar_ratio,
              trades_count, active, live_since)
@@ -188,7 +188,7 @@ def save_param_set(params: dict, source="initial", metrics=None):
               metrics.get("calmar_ratio", 0),
               metrics.get("trades_count", 0),
               datetime.utcnow()))
-        return conn.lastrowid
+        return cur.lastrowid
 
 def get_active_params():
     with get_conn() as conn:

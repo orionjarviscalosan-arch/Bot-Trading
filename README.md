@@ -114,6 +114,48 @@ tail -f data/bot.log
 
 ---
 
+## Dashboard Streamlit (visualización de trades)
+
+Panel web interactivo: curva de equity, operaciones, señales y posición abierta.
+
+### Instalar dependencias (si ya tenías el bot instalado)
+
+```bash
+cd ~/Bot-Trading
+source venv/bin/activate
+pip install streamlit plotly
+```
+
+### Probar en el VPS
+
+```bash
+streamlit run dashboard/app.py --server.address 127.0.0.1 --server.port 8501
+```
+
+### Acceso desde tu PC (túnel SSH — recomendado)
+
+En tu PC (no en el VPS):
+
+```bash
+ssh -L 8501:127.0.0.1:8501 root@IP_DE_TU_VPS
+```
+
+Abre en el navegador: **http://localhost:8501**
+
+### Servicio 24/7 del dashboard
+
+```bash
+# Opcional: contraseña en .env
+# DASHBOARD_PASSWORD=tu_clave_segura
+
+sudo bash deploy/install-dashboard.sh
+sudo systemctl start nextwaves-dashboard
+```
+
+El dashboard solo escucha en **localhost** (no expuesto a internet). Siempre usa túnel SSH o configura un reverse proxy con auth.
+
+---
+
 ## Auto-optimización
 
 Cada 30 días (job programado a las 03:00 UTC) el bot:

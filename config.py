@@ -104,3 +104,7 @@ DB_PATH = "data/nextwaves_bot.db"
 # ── LOGGING ──────────────────────────────────────────────
 LOG_LEVEL  = "INFO"
 LOG_FILE   = "data/bot.log"
+
+# ── DASHBOARD STREAMLIT ──────────────────────────────────
+DASHBOARD_PORT     = int(os.getenv("DASHBOARD_PORT", "8501"))
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
