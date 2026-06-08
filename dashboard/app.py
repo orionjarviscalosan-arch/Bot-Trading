@@ -2,6 +2,7 @@
 Dashboard Streamlit — visualización de trades y señales del Nextwaves Bot
 Ejecutar: streamlit run dashboard/app.py
 """
+import html
 import os
 import sys
 
@@ -21,6 +22,7 @@ from bot.trading_styles import TRADING_STYLES, STYLE_LABELS
 from bot.dashboard_data import (
     get_trades_df, get_closed_trades_df, get_open_trades_df,
     get_signals_df, get_metrics, get_bot_status, build_equity_curve,
+    enrich_open_trades,
 )
 
 st.set_page_config(
@@ -49,6 +51,171 @@ def fmt_pct(v):
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return "—"
     return f"{v:+.2%}"
+
+
+def fmt_num(v, decimals=2):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    return f"{v:,.{decimals}f}"
+
+
+def fmt_dt(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    if hasattr(v, "strftime"):
+        return v.strftime("%Y-%m-%d %H:%M:%S UTC")
+    return str(v)
+
+
+def _pnl_row_class(pnl) -> str:
+    if pnl is None or (isinstance(pnl, float) and pd.isna(pnl)):
+        return "row-neutral"
+    if pnl > 0:
+        return "row-profit"
+    if pnl < 0:
+        return "row-loss"
+    return "row-neutral"
+
+
+def _pnl_cell_class(pnl) -> str:
+    if pnl is None or (isinstance(pnl, float) and pd.isna(pnl)):
+        return ""
+    return "pnl-pos" if pnl > 0 else "pnl-neg" if pnl < 0 else ""
+
+
+def render_open_positions_table(open_df: pd.DataFrame) -> None:
+    """Tabla HTML con scroll lateral y colores según PnL no realizado."""
+    enriched, current_price = enrich_open_trades(open_df)
+
+    if current_price is None:
+        st.warning(
+            "No se pudo obtener el precio actual de Binance. "
+            "Se muestran los datos de la posición sin PnL en vivo."
+        )
+    else:
+        st.caption(f"Precio de mercado: **{fmt_num(current_price)} USDT**")
+
+    columns = [
+        ("trade_id", "ID"),
+        ("symbol", "Símbolo"),
+        ("side", "Lado"),
+        ("trading_style", "Estilo"),
+        ("timeframe", "TF"),
+        ("entry_time", "Entrada"),
+        ("entry_price", "Precio entrada"),
+        ("stop_loss", "Stop Loss"),
+        ("take_profit", "Take Profit"),
+        ("trail_level", "Trail"),
+        ("quantity", "Cantidad"),
+        ("score_bull", "Score Bull"),
+        ("score_bear", "Score Bear"),
+        ("precio_actual", "Precio actual"),
+        ("pnl_no_realizado", "PnL no realizado"),
+        ("pnl_pct_no_realizado", "PnL %"),
+    ]
+
+    header = "".join(
+        f"<th>{html.escape(label)}</th>" for _, label in columns
+    )
+
+    rows_html = []
+    for _, row in enriched.iterrows():
+        pnl = row.get("pnl_no_realizado")
+        row_class = _pnl_row_class(pnl)
+        cells = []
+
+        for key, _ in columns:
+            val = row.get(key)
+            if key == "trading_style" and pd.notna(val):
+                text = STYLE_LABELS.get(str(val), str(val))
+            elif key == "entry_time":
+                text = fmt_dt(val)
+            elif key in ("entry_price", "stop_loss", "take_profit", "trail_level", "precio_actual"):
+                text = fmt_num(val)
+            elif key == "quantity":
+                text = fmt_num(val, 6)
+            elif key == "pnl_no_realizado":
+                text = fmt_usdt(val) if pd.notna(val) else "—"
+            elif key == "pnl_pct_no_realizado":
+                text = fmt_pct(val) if pd.notna(val) else "—"
+            elif key in ("score_bull", "score_bear"):
+                text = str(int(val)) if pd.notna(val) else "—"
+            else:
+                text = "—" if val is None or (isinstance(val, float) and pd.isna(val)) else str(val)
+
+            css = ""
+            if key in ("pnl_no_realizado", "pnl_pct_no_realizado") and pd.notna(pnl):
+                css = f' class="{_pnl_cell_class(pnl)}"'
+
+            cells.append(f"<td{css}>{html.escape(text)}</td>")
+
+        rows_html.append(f'<tr class="{row_class}">{"".join(cells)}</tr>')
+
+    table_html = f"""
+    <style>
+    .nw-table-wrap {{
+        overflow-x: auto;
+        width: 100%;
+        margin: 0.5rem 0 1rem;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px;
+    }}
+    .nw-positions-table {{
+        width: max-content;
+        min-width: 100%;
+        border-collapse: collapse;
+        font-size: 0.875rem;
+    }}
+    .nw-positions-table th,
+    .nw-positions-table td {{
+        padding: 10px 14px;
+        white-space: nowrap;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        text-align: right;
+    }}
+    .nw-positions-table th:first-child,
+    .nw-positions-table td:first-child,
+    .nw-positions-table th:nth-child(2),
+    .nw-positions-table td:nth-child(2),
+    .nw-positions-table th:nth-child(3),
+    .nw-positions-table td:nth-child(3),
+    .nw-positions-table th:nth-child(4),
+    .nw-positions-table td:nth-child(4) {{
+        text-align: left;
+    }}
+    .nw-positions-table th {{
+        background: rgba(255,255,255,0.06);
+        font-weight: 600;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+    }}
+    .nw-positions-table tr.row-profit {{
+        background: rgba(34, 197, 94, 0.14);
+    }}
+    .nw-positions-table tr.row-loss {{
+        background: rgba(239, 68, 68, 0.14);
+    }}
+    .nw-positions-table tr.row-neutral {{
+        background: transparent;
+    }}
+    .nw-positions-table td.pnl-pos {{
+        color: #22c55e;
+        font-weight: 700;
+    }}
+    .nw-positions-table td.pnl-neg {{
+        color: #ef4444;
+        font-weight: 700;
+    }}
+    </style>
+    <div class="nw-table-wrap">
+        <table class="nw-positions-table">
+            <thead><tr>{header}</tr></thead>
+            <tbody>{"".join(rows_html)}</tbody>
+        </table>
+    </div>
+    """
+    st.markdown(table_html, unsafe_allow_html=True)
 
 
 def main():
@@ -128,25 +295,31 @@ def main():
     c4.metric("PnL neto", fmt_usdt(metrics.get("net_pnl")) if metrics else "—")
     c5.metric("Max Drawdown", f"{metrics.get('max_drawdown', 0):.1%}" if metrics else "—")
 
-    # ── Posición abierta ──────────────────────────────────
+    # ── Resumen posiciones abiertas ───────────────────────
     st.subheader("Posición abierta")
     if open_df.empty:
         st.info("Sin posición abierta en este modo.")
     else:
-        for _, row in open_df.iterrows():
-            cols = st.columns(6)
-            cols[0].metric("Entrada", fmt_usdt(row["entry_price"]))
-            cols[1].metric("SL", fmt_usdt(row["stop_loss"]))
-            cols[2].metric("TP", fmt_usdt(row["take_profit"]))
-            cols[3].metric("Qty BTC", f"{row['quantity']:.6f}")
-            cols[4].metric("Score Bull", int(row["score_bull"]))
-            cols[5].metric("Desde", str(row["entry_time"])[:16])
+        n = len(open_df)
+        st.success(
+            f"**{n}** posición(es) abierta(s). "
+            "Detalle completo en la pestaña **Posiciones abiertas**."
+        )
 
     st.divider()
 
-    tab_equity, tab_trades, tab_signals, tab_reasons = st.tabs(
-        ["Curva de equity", "Operaciones", "Señales", "Por motivo de salida"]
+    tab_open, tab_equity, tab_trades, tab_signals, tab_reasons = st.tabs(
+        ["Posiciones abiertas", "Curva de equity", "Operaciones", "Señales", "Por motivo de salida"]
     )
+
+    with tab_open:
+        if open_df.empty:
+            st.info("Sin posición abierta en este modo.")
+        else:
+            render_open_positions_table(open_df)
+            st.caption(
+                "Verde = ganando · Rojo = perdiendo · Desliza horizontalmente si no caben todas las columnas."
+            )
 
     with tab_equity:
         curve = build_equity_curve(closed)

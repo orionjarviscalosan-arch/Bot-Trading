@@ -105,3 +105,27 @@ def build_equity_curve(closed: pd.DataFrame) -> pd.DataFrame:
     curve = closed.sort_values("exit_time")[["exit_time", "pnl_usdt"]].copy()
     curve["equity"] = curve["pnl_usdt"].cumsum()
     return curve
+
+
+def enrich_open_trades(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None]:
+    """Añade precio actual y PnL no realizado a posiciones abiertas."""
+    if df.empty:
+        return df, None
+
+    import config as cfg
+    from bot.data_fetcher import fetch_current_price
+
+    symbol = df.iloc[0].get("symbol") or cfg.SYMBOL
+    try:
+        current = fetch_current_price(symbol)
+    except Exception:
+        current = None
+
+    out = df.copy()
+    if current is not None:
+        out["precio_actual"] = current
+        out["pnl_no_realizado"] = (out["precio_actual"] - out["entry_price"]) * out["quantity"]
+        out["pnl_pct_no_realizado"] = (
+            (out["precio_actual"] - out["entry_price"]) / out["entry_price"]
+        )
+    return out, current
