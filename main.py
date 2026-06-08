@@ -26,7 +26,7 @@ from bot.optimizer     import should_run_optimization, run_optimization, maybe_p
 from bot.scheduler_utils import candle_close_trigger, candle_close_description
 from bot.startup_check import run_startup_checks
 from bot.style_runtime import init_runtime, get_runtime, set_scheduler, sync_params
-from bot.telegram_commands import poll_telegram_commands
+from bot.telegram_commands import poll_telegram_commands, init_telegram_offset
 from bot.telegram_notifier import (notify_start, notify_signal, notify_trade_open,
                                     notify_trade_close, notify_trail_update,
                                     notify_kill_switch, notify_optimization,
@@ -360,6 +360,7 @@ def main():
         f"trail={params['trail_mult']} | rr={params['rr_ratio']}")
 
     notify_start(rt.bot_mode, cfg.SYMBOL, rt.label, rt.timeframe)
+    init_telegram_offset()
     tg_send(
         "💬 Control por Telegram activo.\n"
         "Envía <b>/ayuda</b> para ver los comandos."

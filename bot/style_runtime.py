@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+import os
 
 import config as cfg
 from bot.database import get_state, set_state, save_param_set, get_active_params
@@ -66,10 +67,11 @@ def init_runtime() -> RuntimeConfig:
     style = get_state("trading_style")
     bot_mode = get_state("bot_mode")
     if style is None:
-        style = cfg.TRADING_STYLE
+        from bot.trading_styles import resolve_active_style
+        style = resolve_active_style()
         set_state("trading_style", style)
     if bot_mode is None:
-        bot_mode = cfg.BOT_MODE
+        bot_mode = getattr(cfg, "BOT_MODE", None) or os.getenv("BOT_MODE", "shadow")
         set_state("bot_mode", bot_mode)
     _runtime = _build(style, bot_mode)
     sync_params(_runtime)

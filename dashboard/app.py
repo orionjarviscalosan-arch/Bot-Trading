@@ -73,12 +73,12 @@ def main():
 
     st.title("Nextwaves Bot Dashboard")
     status = get_bot_status()
-    active_style = status.get("trading_style", cfg.TRADING_STYLE)
+    active_style = status.get("trading_style", "swing")
     style_label = status.get("style_label", STYLE_LABELS.get(active_style, active_style))
-    tf = status.get("timeframe", cfg.TIMEFRAME)
+    tf = status.get("timeframe", "4h")
     st.caption(
         f"{cfg.SYMBOL} · **{style_label}** ({tf}) · "
-        f"modo: **{status.get('bot_mode', cfg.BOT_MODE)}** · HTF {status.get('htf', cfg.HTF)}"
+        f"modo: **{status.get('bot_mode', 'shadow')}** · HTF {status.get('htf', '1d')}"
     )
 
     with st.sidebar:

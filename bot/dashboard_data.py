@@ -1,10 +1,14 @@
 """
 dashboard_data.py — Consultas de solo lectura para el dashboard Streamlit
 """
+import os
 import pandas as pd
-import config as cfg
 from bot.database import get_conn, compute_metrics, get_state, get_active_params
-from bot.trading_styles import TRADING_STYLES
+from bot.trading_styles import TRADING_STYLES, resolve_active_style
+
+
+def _default_bot_mode() -> str:
+    return get_state("bot_mode") or os.getenv("BOT_MODE", "shadow")
 
 
 def get_trades_df(mode: str = "shadow", days: int = 90,
@@ -78,30 +82,19 @@ def get_metrics(mode: str = "shadow", days: int = 90,
 
 
 def get_bot_status() -> dict:
-    from bot.style_runtime import get_runtime
-    try:
-        rt = get_runtime()
-        active_style = rt.style
-        style_label = rt.label
-        timeframe = rt.timeframe
-        htf = rt.htf
-        bot_mode = rt.bot_mode
-    except Exception:
-        active_style = get_state("trading_style", cfg.TRADING_STYLE)
-        style_cfg = TRADING_STYLES.get(active_style, TRADING_STYLES["swing"])
-        style_label = style_cfg.get("label", active_style)
-        timeframe = style_cfg.get("timeframe", cfg.TIMEFRAME)
-        htf = style_cfg.get("htf", cfg.HTF)
-        bot_mode = get_state("bot_mode", cfg.BOT_MODE)
+    """Estado del bot leyendo SQLite (sin depender del proceso del bot)."""
+    active_style = resolve_active_style()
+    style_cfg = TRADING_STYLES.get(active_style, TRADING_STYLES["swing"])
+    bot_mode = _default_bot_mode()
     return {
         "bot_killed": bool(get_state("bot_killed", False)),
         "kill_reason": get_state("kill_reason"),
         "pause_until": get_state("pause_until"),
         "active_params": get_active_params(),
         "trading_style": active_style,
-        "style_label": style_label,
-        "timeframe": timeframe,
-        "htf": htf,
+        "style_label": style_cfg.get("label", active_style),
+        "timeframe": style_cfg.get("timeframe", "4h"),
+        "htf": style_cfg.get("htf", "1d"),
         "bot_mode": bot_mode,
     }
 

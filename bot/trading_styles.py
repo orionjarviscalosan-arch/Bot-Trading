@@ -101,6 +101,19 @@ def normalize_style(style: str) -> str:
     return s
 
 
+def resolve_active_style() -> str:
+    """Estilo activo: bot_state → env → swing."""
+    try:
+        from bot.database import get_state
+        stored = get_state("trading_style") or get_state("active_trading_style")
+        if stored:
+            return normalize_style(stored)
+    except Exception:
+        pass
+    import os
+    return normalize_style(os.getenv("TRADING_STYLE", "swing"))
+
+
 def get_style_config(style: str) -> dict:
     return TRADING_STYLES[normalize_style(style)]
 
