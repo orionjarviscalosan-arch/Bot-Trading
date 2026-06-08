@@ -1,0 +1,22 @@
+[Unit]
+Description=Nextwaves Trading Bot (BTC/USDT Spot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_USER
+Group=REPLACE_USER
+WorkingDirectory=REPLACE_PATH
+EnvironmentFile=REPLACE_PATH/.env
+ExecStart=REPLACE_PATH/venv/bin/python main.py
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+
+# Seguridad básica
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

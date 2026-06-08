@@ -1,0 +1,21 @@
+# Entorno y secretos
+.env
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Datos del bot
+data/
+*.db
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
