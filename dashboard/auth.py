@@ -21,6 +21,20 @@ def get_cookie_manager():
     return st.session_state.nw_cookie_manager
 
 
+def invalidate_cookies_cache() -> None:
+    """Invalida cache tras escribir cookies (set/delete)."""
+    st.session_state.pop("nw_all_cookies", None)
+    st.session_state.pop("nw_dashboard_prefs", None)
+
+
+def get_all_cookies() -> dict | None:
+    """Lee todas las cookies una sola vez por render (evita claves duplicadas)."""
+    if "nw_all_cookies" not in st.session_state:
+        cm = get_cookie_manager()
+        st.session_state["nw_all_cookies"] = cm.get_all(key="nw_cookies_get_all")
+    return st.session_state["nw_all_cookies"]
+
+
 def _create_token(password: str) -> str:
     expiry = int(time.time()) + SESSION_DAYS * 86400
     sig = hmac.new(
@@ -50,11 +64,13 @@ def _save_cookie_token(cookie_manager, password: str) -> None:
         expires_at=expires,
         key="nw_save_auth_cookie",
     )
+    invalidate_cookies_cache()
 
 
 def clear_session(cookie_manager) -> None:
     cookie_manager.delete(COOKIE_NAME, key="nw_delete_auth_cookie")
     st.session_state.pop("authenticated", None)
+    invalidate_cookies_cache()
 
 
 def check_auth() -> bool:
@@ -64,7 +80,7 @@ def check_auth() -> bool:
         return True
 
     cookie_manager = get_cookie_manager()
-    cookies = cookie_manager.get_all()
+    cookies = get_all_cookies()
     if cookies is None:
         st.stop()
 

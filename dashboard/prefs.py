@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
-from dashboard.auth import get_cookie_manager
+from dashboard.auth import get_cookie_manager, get_all_cookies, invalidate_cookies_cache
 
 PREFS_COOKIE = "nw_dashboard_prefs"
 PREFS_DAYS = 365
@@ -22,12 +22,11 @@ def _parse_prefs(raw) -> dict:
 
 
 def get_prefs() -> dict:
-    """Lee preferencias desde cookie (una vez por sesión Streamlit)."""
+    """Lee preferencias desde cookie (reutiliza la lectura única de auth)."""
     if "nw_dashboard_prefs" in st.session_state:
         return st.session_state["nw_dashboard_prefs"]
 
-    cm = get_cookie_manager()
-    cookies = cm.get_all()
+    cookies = get_all_cookies()
     if cookies is None:
         st.session_state["nw_dashboard_prefs"] = {}
         return {}
@@ -47,3 +46,4 @@ def save_prefs(prefs: dict) -> None:
         expires_at=datetime.now() + timedelta(days=PREFS_DAYS),
         key="nw_save_dashboard_prefs",
     )
+    invalidate_cookies_cache()
