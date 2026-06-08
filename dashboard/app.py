@@ -18,6 +18,7 @@ load_dotenv()
 
 import config as cfg
 from dashboard.auth import check_auth, get_cookie_manager, clear_session
+from dashboard.prefs import get_prefs, save_prefs
 from bot.trading_styles import TRADING_STYLES, STYLE_LABELS
 from bot.dashboard_data import (
     get_trades_df, get_closed_trades_df, get_open_trades_df,
@@ -223,15 +224,60 @@ def render_open_positions_table(open_df: pd.DataFrame) -> None:
     st.markdown(table_html, unsafe_allow_html=True)
 
 
+def _sync_bot_filters(status: dict) -> tuple[str, str]:
+    """Sincroniza filtros del sidebar con el estado del bot (Telegram)."""
+    active_style = status.get("trading_style", "swing")
+    bot_mode = status.get("bot_mode", "shadow")
+    mode_options = ["shadow", "paper", "live"]
+    if bot_mode not in mode_options:
+        bot_mode = "shadow"
+
+    if st.session_state.get("nw_bot_style") != active_style:
+        st.session_state["nw_bot_style"] = active_style
+        st.session_state["nw_style_filter"] = active_style
+
+    if st.session_state.get("nw_bot_mode_sync") != bot_mode:
+        st.session_state["nw_bot_mode_sync"] = bot_mode
+        st.session_state["nw_mode_filter"] = bot_mode
+
+    if "nw_style_filter" not in st.session_state:
+        st.session_state["nw_style_filter"] = active_style
+    if "nw_mode_filter" not in st.session_state:
+        st.session_state["nw_mode_filter"] = bot_mode
+
+    return active_style, bot_mode
+
+
+def _style_filter_options(active_style: str) -> list[str]:
+    others = [s for s in TRADING_STYLES if s != active_style]
+    return [active_style, "todos"] + others
+
+
+def _safe_index(options: list, value, default: int = 0) -> int:
+    try:
+        return options.index(value)
+    except ValueError:
+        return default
+
+
+def _style_filter_label(value: str, active_style: str) -> str:
+    if value == "todos":
+        return "Todos los estilos"
+    if value == active_style:
+        return f"▶ {STYLE_LABELS.get(value, value)} (activo Telegram)"
+    return STYLE_LABELS.get(value, value)
+
+
 def main():
     if not check_auth():
         return
 
     st.title("Nextwaves Bot Dashboard")
     status = get_bot_status()
-    active_style = status.get("trading_style", "swing")
+    active_style, bot_mode_active = _sync_bot_filters(status)
     style_label = status.get("style_label", STYLE_LABELS.get(active_style, active_style))
     tf = status.get("timeframe", "4h")
+    prefs = get_prefs()
     pairs_label = ", ".join(status.get("trading_pairs", cfg.TRADING_PAIRS))
     st.caption(
         f"**{pairs_label}** · **{style_label}** ({tf}) · "
@@ -240,28 +286,72 @@ def main():
         f"{status.get('position_size_pct', cfg.POSITION_SIZE_PCT):.0%}/par"
     )
 
+    mode_options = ["shadow", "paper", "live"]
+    style_options = _style_filter_options(active_style)
+    current_style = st.session_state.get("nw_style_filter", active_style)
+    if current_style not in style_options:
+        current_style = active_style
+        st.session_state["nw_style_filter"] = active_style
+
     with st.sidebar:
         st.header("Filtros")
-        mode = st.selectbox("Modo operación", ["shadow", "paper", "live"], index=0)
-        style_options = list(TRADING_STYLES.keys())
-        style_filter = st.selectbox(
-            "Estilo (histórico)",
-            ["todos"] + style_options,
-            format_func=lambda x: "Todos" if x == "todos" else STYLE_LABELS.get(x, x),
+        st.info(
+            f"**Telegram:** {STYLE_LABELS.get(active_style, active_style)} · "
+            f"{tf} · modo {bot_mode_active}"
         )
+
+        mode = st.selectbox(
+            "Modo operación",
+            mode_options,
+            index=_safe_index(
+                mode_options,
+                st.session_state.get("nw_mode_filter", bot_mode_active),
+            ),
+        )
+        st.session_state["nw_mode_filter"] = mode
+
+        style_filter = st.selectbox(
+            "Estilo (datos)",
+            style_options,
+            index=_safe_index(style_options, current_style),
+            format_func=lambda x: _style_filter_label(x, active_style),
+        )
+        st.session_state["nw_style_filter"] = style_filter
         style_param = None if style_filter == "todos" else style_filter
+
         pair_options = ["todos"] + list(cfg.TRADING_PAIRS)
         symbol_filter = st.selectbox("Par (histórico)", pair_options)
         symbol_param = None if symbol_filter == "todos" else symbol_filter
-        days = st.slider("Días de historial", 7, 365, 90)
-        auto_refresh = st.checkbox("Auto-refresh (60s)", value=False)
+
+        days_default = int(prefs.get("days", 90))
+        days = st.slider("Días de historial", 7, 365, days_default)
+
+        auto_refresh = st.checkbox(
+            "Auto-refresh (60s)",
+            value=bool(prefs.get("auto_refresh", False)),
+        )
+
+        col_save, col_refresh = st.columns(2)
+        with col_save:
+            if st.button("Guardar prefs", use_container_width=True):
+                save_prefs({
+                    "auto_refresh": auto_refresh,
+                    "days": days,
+                })
+                st.success("Guardado en este dispositivo")
+        with col_refresh:
+            if st.button("Actualizar", use_container_width=True):
+                st.rerun()
+
         if auto_refresh:
             st.markdown(
                 '<meta http-equiv="refresh" content="60">',
                 unsafe_allow_html=True,
             )
-        if st.button("Actualizar ahora"):
-            st.rerun()
+            st.caption("Auto-refresh activo — recarga cada 60 s")
+
+        if auto_refresh != prefs.get("auto_refresh") or days != prefs.get("days"):
+            save_prefs({"auto_refresh": auto_refresh, "days": days})
 
         if os.getenv("DASHBOARD_PASSWORD"):
             if st.button("Cerrar sesión"):
@@ -302,6 +392,10 @@ def main():
         open_df = open_df[
             (open_df["trading_style"] == style_param) | open_df["trading_style"].isna()]
     signals = get_signals_df(days=min(days, 30))
+    if style_param and not signals.empty and "trading_style" in signals.columns:
+        signals = signals[
+            (signals["trading_style"] == style_param) | signals["trading_style"].isna()
+        ]
 
     # ── Alertas de estado ─────────────────────────────────
     if status.get("bot_killed"):
@@ -419,7 +513,7 @@ def main():
 
     with tab_signals:
         if signals.empty:
-            st.info("Sin señales registradas aún. El bot evalúa en cada cierre de vela 4H.")
+            st.info(f"Sin señales registradas en {tf} para el filtro seleccionado.")
         else:
             sig_display = signals[[
                 "timestamp", "symbol", "direction", "score_bull", "score_bear",
