@@ -1,6 +1,6 @@
 [Unit]
 Description=Nextwaves Bot Dashboard (Streamlit)
-After=network-online.target nextwaves-bot.service
+After=network-online.target tailscaled.service nextwaves-bot.service
 Wants=network-online.target
 
 [Service]
@@ -9,7 +9,7 @@ User=REPLACE_USER
 Group=REPLACE_USER
 WorkingDirectory=REPLACE_PATH
 EnvironmentFile=REPLACE_PATH/.env
-ExecStart=REPLACE_PATH/venv/bin/streamlit run dashboard/app.py --server.address 127.0.0.1 --server.port 8501 --server.headless true
+ExecStart=REPLACE_PATH/venv/bin/streamlit run dashboard/app.py --server.address SERVER_ADDRESS --server.port SERVER_PORT --server.headless true
 Restart=always
 RestartSec=10
 StandardOutput=journal

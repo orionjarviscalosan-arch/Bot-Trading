@@ -118,41 +118,66 @@ tail -f data/bot.log
 
 Panel web interactivo: curva de equity, operaciones, señales y posición abierta.
 
-### Instalar dependencias (si ya tenías el bot instalado)
+### Instalar dependencias
 
 ```bash
 cd ~/Bot-Trading
+git pull
 source venv/bin/activate
 pip install streamlit plotly
 ```
 
-### Probar en el VPS
+### Acceso PC + móvil con Tailscale (recomendado)
 
-```bash
-streamlit run dashboard/app.py --server.address 127.0.0.1 --server.port 8501
+**1. Contraseña obligatoria** en `.env`:
+
+```env
+DASHBOARD_PASSWORD=tu_clave_larga_y_segura
+DASHBOARD_PORT=8501
 ```
 
-### Acceso desde tu PC (túnel SSH — recomendado)
-
-En tu PC (no en el VPS):
+**2. En el VPS** — instala dashboard + Tailscale + firewall:
 
 ```bash
-ssh -L 8501:127.0.0.1:8501 root@IP_DE_TU_VPS
+cd ~/Bot-Trading
+sudo bash deploy/install-dashboard-tailscale.sh
 ```
 
-Abre en el navegador: **http://localhost:8501**
+Si es la primera vez con Tailscale, el script pedirá ejecutar `sudo tailscale up` y autenticarte; luego vuelve a lanzar el script.
 
-### Servicio 24/7 del dashboard
+**3. En tu PC y móvil:**
+
+- Instala [Tailscale](https://tailscale.com/download) (misma cuenta en todos)
+- Activa Tailscale (conectado)
+- Abre en el navegador la URL que muestra el script, por ejemplo:
+
+  **http://100.x.x.x:8501**
+
+  (usa la IP Tailscale del VPS, **no** la IP pública)
+
+**4. Introduce** la contraseña de `DASHBOARD_PASSWORD`.
+
+| Dispositivo | Qué hacer |
+|-------------|-----------|
+| PC | Tailscale ON → `http://100.x.x.x:8501` |
+| Móvil | App Tailscale ON → mismo enlace en Chrome/Safari |
+
+El puerto 8501 solo acepta conexiones desde la red Tailscale (100.64.0.0/10), no desde internet público.
+
+### Acceso solo PC (túnel SSH, sin Tailscale)
 
 ```bash
-# Opcional: contraseña en .env
-# DASHBOARD_PASSWORD=tu_clave_segura
-
 sudo bash deploy/install-dashboard.sh
 sudo systemctl start nextwaves-dashboard
 ```
 
-El dashboard solo escucha en **localhost** (no expuesto a internet). Siempre usa túnel SSH o configura un reverse proxy con auth.
+En tu PC:
+
+```bash
+ssh -L 8501:127.0.0.1:8501 root@IP_PUBLICA_VPS
+```
+
+Abre **http://localhost:8501**
 
 ---
 
