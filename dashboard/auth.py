@@ -14,9 +14,11 @@ COOKIE_NAME = "nw_dashboard_auth"
 SESSION_DAYS = int(os.getenv("DASHBOARD_SESSION_DAYS", "30"))
 
 
-@st.cache_resource
 def get_cookie_manager():
-    return stx.CookieManager(key="nw_dashboard_cookies")
+    """Un CookieManager por sesión de Streamlit (no usar @st.cache_*: crea widgets)."""
+    if "nw_cookie_manager" not in st.session_state:
+        st.session_state.nw_cookie_manager = stx.CookieManager(key="nw_dashboard_cookies")
+    return st.session_state.nw_cookie_manager
 
 
 def _create_token(password: str) -> str:
@@ -38,13 +40,6 @@ def _verify_token(token: str, password: str) -> bool:
         return hmac.compare_digest(sig, expected)
     except Exception:
         return False
-
-
-def _read_cookie_token(cookie_manager) -> str | None:
-    cookies = cookie_manager.get_all()
-    if not cookies:
-        return None
-    return cookies.get(COOKIE_NAME)
 
 
 def _save_cookie_token(cookie_manager, password: str) -> None:
@@ -69,7 +64,11 @@ def check_auth() -> bool:
         return True
 
     cookie_manager = get_cookie_manager()
-    token = _read_cookie_token(cookie_manager)
+    cookies = cookie_manager.get_all()
+    if cookies is None:
+        st.stop()
+
+    token = cookies.get(COOKIE_NAME)
 
     if token and _verify_token(token, password):
         st.session_state["authenticated"] = True
