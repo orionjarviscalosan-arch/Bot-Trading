@@ -78,7 +78,7 @@ def main():
     tf = status.get("timeframe", cfg.TIMEFRAME)
     st.caption(
         f"{cfg.SYMBOL} · **{style_label}** ({tf}) · "
-        f"modo: **{cfg.BOT_MODE}** · HTF {status.get('htf', cfg.HTF)}"
+        f"modo: **{status.get('bot_mode', cfg.BOT_MODE)}** · HTF {status.get('htf', cfg.HTF)}"
     )
 
     with st.sidebar:
@@ -107,7 +107,7 @@ def main():
             marker = "▶ " if key == active_style else "  "
             st.caption(f"{marker}**{sc['label']}** — {sc['timeframe']} / HTF {sc['htf']}")
         st.caption(
-            "Cambiar estilo: edita `TRADING_STYLE` en `.env` y reinicia el bot."
+            "Cambiar estilo/modo: envía comandos al bot en Telegram (/ayuda)."
         )
 
         st.divider()

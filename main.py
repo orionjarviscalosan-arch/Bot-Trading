@@ -9,6 +9,7 @@ import logging.handlers
 from datetime import datetime
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 import config as cfg
 from bot.database      import (init_db, get_active_params, save_param_set,
@@ -24,10 +25,12 @@ from bot.shadow_trader import process_shadow_signal, get_shadow_metrics
 from bot.optimizer     import should_run_optimization, run_optimization, maybe_promote_candidate
 from bot.scheduler_utils import candle_close_trigger, candle_close_description
 from bot.startup_check import run_startup_checks
+from bot.style_runtime import init_runtime, get_runtime, set_scheduler, sync_params
+from bot.telegram_commands import poll_telegram_commands
 from bot.telegram_notifier import (notify_start, notify_signal, notify_trade_open,
                                     notify_trade_close, notify_trail_update,
                                     notify_kill_switch, notify_optimization,
-                                    notify_daily_summary)
+                                    notify_daily_summary, send as tg_send)
 
 # ── LOGGING ───────────────────────────────────────────────
 os.makedirs("data", exist_ok=True)
@@ -39,31 +42,14 @@ logging.basicConfig(
     handlers=[handler, logging.StreamHandler()])
 logger = logging.getLogger("nextwaves_bot")
 
-# ── ESTADO GLOBAL ─────────────────────────────────────────
 risk_manager = RiskManager(cfg.MAX_CAPITAL_USDT)
 
 
 def get_params() -> dict:
-    """Obtiene parámetros activos; recarga preset si cambió TRADING_STYLE."""
-    stored_style = get_state("active_trading_style")
-    if stored_style != cfg.TRADING_STYLE:
-        logger.info(f"Cambio de estilo: {stored_style} → {cfg.TRADING_STYLE}")
-        for key, val in [
-            ("shadow_current_bar", 0), ("current_bar", 0),
-            ("shadow_last_long_bar", None), ("last_long_bar", None),
-        ]:
-            set_state(key, val)
-        params = cfg.SIGNAL_PARAMS.copy()
-        save_param_set(params, source=f"style_{cfg.TRADING_STYLE}")
-        set_state("active_trading_style", cfg.TRADING_STYLE)
-        return params
-
+    rt = get_runtime()
+    sync_params(rt)
     params = get_active_params()
-    if params is None:
-        params = cfg.SIGNAL_PARAMS.copy()
-        save_param_set(params, source=f"style_{cfg.TRADING_STYLE}")
-        set_state("active_trading_style", cfg.TRADING_STYLE)
-    return params
+    return params if params else rt.signal_params.copy()
 
 
 def _persist_bar_state(prefix: str, current_bar: int, last_long_bar: int | None):
@@ -78,18 +64,15 @@ def _load_bar_state(prefix: str) -> tuple[int, int | None]:
 
 
 def on_candle_close():
-    """
-    Se ejecuta al cierre de cada vela configurada.
-    Corazón del bot — evalúa señales y gestiona posiciones.
-    """
-    mode   = cfg.BOT_MODE
+    rt     = get_runtime()
+    mode   = rt.bot_mode
     symbol = cfg.SYMBOL
     params = get_params()
 
-    # ── Shadow (siempre activo, lógica independiente) ─────
     shadow_bar, shadow_last = _load_bar_state("shadow_")
     shadow_bar += 1
-    logger.info(f"── Vela {cfg.TIMEFRAME} cerrada (shadow bar #{shadow_bar}) ──")
+    logger.info(
+        f"── Vela {rt.timeframe} cerrada [{rt.label}] (shadow bar #{shadow_bar}) ──")
 
     if risk_manager.is_killed():
         logger.warning("Bot detenido por kill switch. Operación manual requerida.")
@@ -102,14 +85,14 @@ def on_candle_close():
         return
 
     try:
-        df_4h = fetch_ohlcv(symbol, cfg.TIMEFRAME, limit=cfg.CANDLES_LB)
-        df_1d = fetch_ohlcv(symbol, cfg.HTF,       limit=500)
+        df_ltf = fetch_ohlcv(symbol, rt.timeframe, limit=rt.candles_lb)
+        df_htf = fetch_ohlcv(symbol, rt.htf,       limit=500)
     except Exception as e:
         logger.error(f"Error al obtener datos: {e}")
         return
 
     try:
-        state = compute_all(df_4h, df_1d, params)
+        state = compute_all(df_ltf, df_htf, params)
     except Exception as e:
         logger.error(f"Error en signal_engine: {e}")
         return
@@ -118,19 +101,19 @@ def on_candle_close():
     price = state["price"]
 
     signal_rec = {
-        "timestamp":    state["timestamp"],
-        "symbol":       symbol,
-        "direction":    "none",
-        "score_bull":   sc["score_bull"],
-        "score_bear":   sc["score_bear"],
-        "trail_dir":    sc["trail_dir"],
-        "htf_bull":     sc["htf_bull"],
-        "htf_bear":     sc["htf_bear"],
-        "struct_bias":  sc["struct_bias"],
-        "regime_ok":    sc["regime_ok"],
-        "momentum_raw": sc["momentum_raw"],
-        "acted_on":     False,
-        "trading_style": cfg.TRADING_STYLE,
+        "timestamp":     state["timestamp"],
+        "symbol":          symbol,
+        "direction":       "none",
+        "score_bull":      sc["score_bull"],
+        "score_bear":      sc["score_bear"],
+        "trail_dir":       sc["trail_dir"],
+        "htf_bull":        sc["htf_bull"],
+        "htf_bear":        sc["htf_bear"],
+        "struct_bias":     sc["struct_bias"],
+        "regime_ok":       sc["regime_ok"],
+        "momentum_raw":    sc["momentum_raw"],
+        "acted_on":        False,
+        "trading_style":   rt.style,
     }
 
     new_shadow_last = process_shadow_signal(state, params, shadow_last, shadow_bar)
@@ -138,7 +121,6 @@ def on_candle_close():
         shadow_last = new_shadow_last
     _persist_bar_state("shadow_", shadow_bar, shadow_last)
 
-    # ── Modo activo: paper o live (shadow NO duplica aquí) ─
     if mode in ("live", "paper"):
         current_bar, last_long_bar = _load_bar_state("")
         current_bar += 1
@@ -161,14 +143,14 @@ def on_candle_close():
                 price, open_trade, state["trail_level"], state["trail_dir"],
                 score=sc, params=params) or "trail_flip"
             signal_rec["acted_on"] = True
-            _close_position(open_trade, price, exit_reason, mode, symbol)
+            _close_position(open_trade, price, exit_reason, mode, symbol, rt)
 
         elif signal == "long" and not has_pos:
             signal_rec["acted_on"] = True
             logger.info(
                 f"🟢 SEÑAL LONG | Score Bull: {sc['score_bull']} | Price: {price:.2f}")
             notify_signal(sc, price, "long")
-            if _open_long(state, symbol, mode, params):
+            if _open_long(state, symbol, mode, params, rt):
                 last_long_bar = current_bar
 
         _persist_bar_state("", current_bar, last_long_bar)
@@ -187,20 +169,17 @@ def on_candle_close():
 
 
 def run_scheduled_optimization():
-    """Job separado para optimización — no bloquea el ciclo de vela."""
     if not should_run_optimization():
         return
-    symbol = cfg.SYMBOL
+    rt = get_runtime()
     params = get_params()
     logger.info("Iniciando optimización de parámetros (job programado)...")
-    new_params, metrics = run_optimization(symbol, cfg.TIMEFRAME, cfg.HTF)
+    new_params, metrics = run_optimization(cfg.SYMBOL, rt.timeframe, rt.htf)
     if metrics:
         notify_optimization(params, new_params, metrics)
 
 
-def _manage_open_position(open_trade: dict, state: dict, price: float,
-                           mode: str, symbol: str, params: dict):
-    """Gestiona una posición abierta: actualiza trail, verifica SL/TP"""
+def _manage_open_position(open_trade, state, price, mode, symbol, params):
     trail_lv  = state["trail_level"]
     trail_dir = state["trail_dir"]
     atr_val   = state["atr"]
@@ -217,41 +196,40 @@ def _manage_open_position(open_trade: dict, state: dict, price: float,
     exit_reason = check_exit_conditions(
         price, open_trade, trail_lv, trail_dir, score=sc, params=params)
     if exit_reason:
-        _close_position(open_trade, price, exit_reason, mode, symbol)
+        _close_position(open_trade, price, exit_reason, mode, symbol, get_runtime())
 
 
-def _open_long(state: dict, symbol: str, mode: str, params: dict) -> bool:
-    """Abre una posición long. Devuelve True si se abrió correctamente."""
+def _open_long(state, symbol, mode, params, rt) -> bool:
     sc = state["score"]
 
     if mode == "live":
         usdt_balance = fetch_balance("USDT")
         result = place_market_buy(
             symbol, usdt_balance, state["long_sl"], state["long_tp"],
-            rr_ratio=params.get("rr_ratio", cfg.SIGNAL_PARAMS["rr_ratio"]))
+            rr_ratio=params.get("rr_ratio", 2.0))
         if not result:
             return False
         trade = {
-            "trade_id":    f"live_{uuid.uuid4().hex[:8]}",
-            "mode":        "live",
-            "side":        "long",
-            "symbol":      symbol,
-            "timeframe":   cfg.TIMEFRAME,
-            "entry_time":  result["entry_time"],
-            "entry_price": result["entry_price"],
-            "exit_time":   None,
-            "exit_price":  None,
-            "exit_reason": None,
-            "quantity":    result["quantity"],
-            "pnl_usdt":    None,
-            "pnl_pct":     None,
-            "stop_loss":   result["stop_loss"],
-            "take_profit": result["take_profit"],
-            "score_bull":  sc["score_bull"],
-            "score_bear":  sc["score_bear"],
-            "trail_level": state["trail_level"],
-            "params_id":   None,
-            "trading_style": cfg.TRADING_STYLE,
+            "trade_id":      f"live_{uuid.uuid4().hex[:8]}",
+            "mode":          "live",
+            "side":          "long",
+            "symbol":        symbol,
+            "timeframe":     rt.timeframe,
+            "entry_time":    result["entry_time"],
+            "entry_price":   result["entry_price"],
+            "exit_time":     None,
+            "exit_price":    None,
+            "exit_reason":   None,
+            "quantity":      result["quantity"],
+            "pnl_usdt":      None,
+            "pnl_pct":       None,
+            "stop_loss":     result["stop_loss"],
+            "take_profit":   result["take_profit"],
+            "score_bull":    sc["score_bull"],
+            "score_bear":    sc["score_bear"],
+            "trail_level":   state["trail_level"],
+            "params_id":     None,
+            "trading_style": rt.style,
         }
         save_trade(trade)
         notify_trade_open(result["entry_price"], result["stop_loss"],
@@ -262,26 +240,26 @@ def _open_long(state: dict, symbol: str, mode: str, params: dict) -> bool:
         entry = state["price"]
         qty = (cfg.MAX_CAPITAL_USDT * cfg.POSITION_SIZE_PCT) / entry
         trade = {
-            "trade_id":    f"paper_{uuid.uuid4().hex[:8]}",
-            "mode":        "paper",
-            "side":        "long",
-            "symbol":      symbol,
-            "timeframe":   cfg.TIMEFRAME,
-            "entry_time":  datetime.utcnow(),
-            "entry_price": entry,
-            "exit_time":   None,
-            "exit_price":  None,
-            "exit_reason": None,
-            "quantity":    qty,
-            "pnl_usdt":    None,
-            "pnl_pct":     None,
-            "stop_loss":   state["long_sl"],
-            "take_profit": state["long_tp"],
-            "score_bull":  sc["score_bull"],
-            "score_bear":  sc["score_bear"],
-            "trail_level": state["trail_level"],
-            "params_id":   None,
-            "trading_style": cfg.TRADING_STYLE,
+            "trade_id":      f"paper_{uuid.uuid4().hex[:8]}",
+            "mode":          "paper",
+            "side":          "long",
+            "symbol":        symbol,
+            "timeframe":     rt.timeframe,
+            "entry_time":    datetime.utcnow(),
+            "entry_price":   entry,
+            "exit_time":     None,
+            "exit_price":    None,
+            "exit_reason":   None,
+            "quantity":      qty,
+            "pnl_usdt":      None,
+            "pnl_pct":       None,
+            "stop_loss":     state["long_sl"],
+            "take_profit":   state["long_tp"],
+            "score_bull":    sc["score_bull"],
+            "score_bear":    sc["score_bear"],
+            "trail_level":   state["trail_level"],
+            "params_id":     None,
+            "trading_style": rt.style,
         }
         save_trade(trade)
         notify_trade_open(entry, state["long_sl"], state["long_tp"], qty, mode)
@@ -290,9 +268,7 @@ def _open_long(state: dict, symbol: str, mode: str, params: dict) -> bool:
     return False
 
 
-def _close_position(open_trade: dict, price: float, reason: str,
-                    mode: str, symbol: str):
-    """Cierra la posición abierta"""
+def _close_position(open_trade, price, reason, mode, symbol, rt):
     if open_trade.get("exit_time"):
         return
 
@@ -317,8 +293,8 @@ def _close_position(open_trade: dict, price: float, reason: str,
 
 
 def daily_summary():
-    """Resumen diario enviado por Telegram"""
-    mode   = cfg.BOT_MODE
+    rt = get_runtime()
+    mode = rt.bot_mode
     report_mode = mode if mode in ("live", "paper") else "shadow"
     trades = get_recent_trades(report_mode, days=1)
     today_pnl  = sum(t.get("pnl_usdt", 0) for t in trades
@@ -337,11 +313,8 @@ def daily_summary():
 
 
 def check_price_monitor():
-    """
-    Monitoreo de precio cada 5 minutos.
-    Solo para modos live/paper — shadow usa cierre de vela.
-    """
-    mode = cfg.BOT_MODE
+    rt = get_runtime()
+    mode = rt.bot_mode
     if mode not in ("live", "paper"):
         return
 
@@ -356,22 +329,15 @@ def check_price_monitor():
 
         if price <= sl:
             logger.warning(f"SL tocado ({price:.2f} ≤ {sl:.2f}) — cerrando")
-            _close_position(open_trade, price, "sl", mode, cfg.SYMBOL)
+            _close_position(open_trade, price, "sl", mode, cfg.SYMBOL, rt)
         elif price >= tp:
             logger.info(f"TP alcanzado ({price:.2f} ≥ {tp:.2f}) — cerrando")
-            _close_position(open_trade, price, "tp", mode, cfg.SYMBOL)
+            _close_position(open_trade, price, "tp", mode, cfg.SYMBOL, rt)
     except Exception as e:
         logger.error(f"Error en monitoreo de precio: {e}")
 
 
 def main():
-    logger.info("=" * 60)
-    logger.info("  NEXTWAVES BOT — Iniciando")
-    logger.info(f"  Modo:  {cfg.BOT_MODE.upper()}")
-    logger.info(f"  Estilo: {cfg.TRADING_STYLE_LABEL} ({cfg.TRADING_STYLE})")
-    logger.info(f"  Par:   {cfg.SYMBOL} {cfg.TIMEFRAME} · HTF {cfg.HTF}")
-    logger.info("=" * 60)
-
     init_db()
 
     if get_state("last_optimization") is None:
@@ -379,28 +345,47 @@ def main():
         logger.info("Optimización diferida — próxima ejecución en 30 días")
 
     run_startup_checks()
+    rt = init_runtime()
+
+    logger.info("=" * 60)
+    logger.info("  NEXTWAVES BOT — Iniciando")
+    logger.info(f"  Modo:   {rt.bot_mode.upper()}")
+    logger.info(f"  Estilo: {rt.label} ({rt.timeframe} · HTF {rt.htf})")
+    logger.info(f"  Par:    {cfg.SYMBOL}")
+    logger.info("=" * 60)
 
     params = get_params()
     logger.info(
         f"Parámetros activos: score={params['score_threshold']} | "
         f"trail={params['trail_mult']} | rr={params['rr_ratio']}")
 
-    notify_start(cfg.BOT_MODE, cfg.SYMBOL, cfg.TRADING_STYLE_LABEL, cfg.TIMEFRAME)
+    notify_start(rt.bot_mode, cfg.SYMBOL, rt.label, rt.timeframe)
+    tg_send(
+        "💬 Control por Telegram activo.\n"
+        "Envía <b>/ayuda</b> para ver los comandos."
+    )
 
     scheduler = BlockingScheduler(timezone="UTC")
+    set_scheduler(scheduler)
 
     scheduler.add_job(
         on_candle_close,
-        candle_close_trigger(cfg.TIMEFRAME),
+        candle_close_trigger(rt.timeframe),
         id="candle_close",
-        name=f"Cierre vela {cfg.TIMEFRAME}",
+        name=f"Cierre vela {rt.timeframe}",
         misfire_grace_time=120,
     )
 
     scheduler.add_job(
         check_price_monitor,
-        "interval", minutes=cfg.PRICE_MONITOR_MINUTES,
+        IntervalTrigger(minutes=rt.price_monitor_minutes),
         id="price_monitor", name="Monitor precio",
+    )
+
+    scheduler.add_job(
+        poll_telegram_commands,
+        IntervalTrigger(seconds=3),
+        id="telegram_poll", name="Comandos Telegram",
     )
 
     scheduler.add_job(
@@ -416,7 +401,7 @@ def main():
     )
 
     logger.info("Scheduler iniciado.")
-    logger.info(f"Cierre de vela: {candle_close_description(cfg.TIMEFRAME)}")
+    logger.info(f"Cierre de vela: {candle_close_description(rt.timeframe)}")
 
     try:
         scheduler.start()

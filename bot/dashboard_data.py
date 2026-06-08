@@ -78,17 +78,31 @@ def get_metrics(mode: str = "shadow", days: int = 90,
 
 
 def get_bot_status() -> dict:
-    active_style = get_state("active_trading_style", cfg.TRADING_STYLE)
-    style_cfg = TRADING_STYLES.get(active_style, TRADING_STYLES["swing"])
+    from bot.style_runtime import get_runtime
+    try:
+        rt = get_runtime()
+        active_style = rt.style
+        style_label = rt.label
+        timeframe = rt.timeframe
+        htf = rt.htf
+        bot_mode = rt.bot_mode
+    except Exception:
+        active_style = get_state("trading_style", cfg.TRADING_STYLE)
+        style_cfg = TRADING_STYLES.get(active_style, TRADING_STYLES["swing"])
+        style_label = style_cfg.get("label", active_style)
+        timeframe = style_cfg.get("timeframe", cfg.TIMEFRAME)
+        htf = style_cfg.get("htf", cfg.HTF)
+        bot_mode = get_state("bot_mode", cfg.BOT_MODE)
     return {
         "bot_killed": bool(get_state("bot_killed", False)),
         "kill_reason": get_state("kill_reason"),
         "pause_until": get_state("pause_until"),
         "active_params": get_active_params(),
         "trading_style": active_style,
-        "style_label": style_cfg.get("label", active_style),
-        "timeframe": style_cfg.get("timeframe", cfg.TIMEFRAME),
-        "htf": style_cfg.get("htf", cfg.HTF),
+        "style_label": style_label,
+        "timeframe": timeframe,
+        "htf": htf,
+        "bot_mode": bot_mode,
     }
 
 

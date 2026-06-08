@@ -79,6 +79,24 @@ sudo systemctl restart nextwaves-bot
 
 Cada estilo ajusta automáticamente: umbral de score, cooldown, trail, R:R, pivots y monitor de precio.
 
+### Control desde Telegram (recomendado)
+
+Sin tocar el `.env` — envía comandos a tu bot en Telegram:
+
+| Comando | Acción |
+|---------|--------|
+| `/scalper` | Estilo rápido (15m) |
+| `/daytrader` | Intradía (1h) |
+| `/swing` | Posiciones largas (4h) |
+| `/shadow` | Simulación sin dinero |
+| `/paper` | Paper trading |
+| `/live confirmar` | Dinero real ⚠️ |
+| `/estilo` | Ver estilo actual |
+| `/estado` | Resumen del bot |
+| `/ayuda` | Lista de comandos |
+
+Los cambios se aplican **al instante** sin reiniciar el VPS.
+
 ---
 
 ## Fases de despliegue
