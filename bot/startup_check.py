@@ -3,6 +3,7 @@ startup_check.py — Validación de configuración al arrancar
 """
 import logging
 import config as cfg
+from bot.trading_styles import VALID_STYLES, TRADING_STYLES, STYLE_LABELS
 from bot.data_fetcher import validate_connection
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,11 @@ def validate_startup() -> list[str]:
 
     if cfg.BOT_MODE not in VALID_MODES:
         errors.append(f"BOT_MODE inválido: '{cfg.BOT_MODE}'. Usa: shadow | paper | live")
+
+    if cfg.TRADING_STYLE not in VALID_STYLES:
+        errors.append(
+            f"TRADING_STYLE inválido: '{cfg.TRADING_STYLE}'. "
+            f"Usa: scalper | day_trader | swing")
 
     if cfg.MAX_CAPITAL_USDT < cfg.MIN_ORDER_USDT:
         errors.append(
@@ -59,3 +65,6 @@ def run_startup_checks():
         logger.info("Modo SHADOW: no se ejecutarán órdenes reales")
     elif cfg.BOT_MODE == "paper":
         logger.info("Modo PAPER: simulación con capital virtual, sin órdenes reales")
+    logger.info(
+        f"Estilo {cfg.TRADING_STYLE_LABEL}: {cfg.TIMEFRAME} (HTF {cfg.HTF}) — "
+        f"{TRADING_STYLES[cfg.TRADING_STYLE]['description']}")

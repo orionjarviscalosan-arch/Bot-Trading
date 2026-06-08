@@ -57,6 +57,30 @@ MAX_CAPITAL_USDT=1000.0
 
 ---
 
+## Estilos de trading (Scalper / Day Trader / Swing)
+
+El bot autoajusta **timeframe**, **HTF** y **parámetros de señal** según el estilo en `.env`:
+
+| Estilo | `TRADING_STYLE` | Timeframe | HTF | Frecuencia aprox. |
+|--------|-----------------|-----------|-----|-------------------|
+| **Scalper** | `scalper` | 15m | 1h | Señal cada ~15 min |
+| **Day Trader** | `day_trader` | 1h | 4h | Señal cada hora |
+| **Swing** | `swing` | 4h | 1d | Señal cada 4 h (default) |
+
+```env
+TRADING_STYLE=scalper   # o day_trader | swing
+```
+
+Tras cambiar el estilo, **reinicia el bot**:
+
+```bash
+sudo systemctl restart nextwaves-bot
+```
+
+Cada estilo ajusta automáticamente: umbral de score, cooldown, trail, R:R, pivots y monitor de precio.
+
+---
+
 ## Fases de despliegue
 
 ### Fase 1 — Shadow (semanas 1-4)

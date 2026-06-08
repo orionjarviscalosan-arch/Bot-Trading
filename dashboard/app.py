@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import config as cfg
+from bot.trading_styles import TRADING_STYLES, STYLE_LABELS
 from bot.dashboard_data import (
     get_trades_df, get_closed_trades_df, get_open_trades_df,
     get_signals_df, get_metrics, get_bot_status, build_equity_curve,
@@ -71,11 +72,25 @@ def main():
         return
 
     st.title("Nextwaves Bot Dashboard")
-    st.caption(f"{cfg.SYMBOL} · {cfg.TIMEFRAME} · modo configurado: **{cfg.BOT_MODE}**")
+    status = get_bot_status()
+    active_style = status.get("trading_style", cfg.TRADING_STYLE)
+    style_label = status.get("style_label", STYLE_LABELS.get(active_style, active_style))
+    tf = status.get("timeframe", cfg.TIMEFRAME)
+    st.caption(
+        f"{cfg.SYMBOL} · **{style_label}** ({tf}) · "
+        f"modo: **{cfg.BOT_MODE}** · HTF {status.get('htf', cfg.HTF)}"
+    )
 
     with st.sidebar:
         st.header("Filtros")
-        mode = st.selectbox("Modo", ["shadow", "paper", "live"], index=0)
+        mode = st.selectbox("Modo operación", ["shadow", "paper", "live"], index=0)
+        style_options = list(TRADING_STYLES.keys())
+        style_filter = st.selectbox(
+            "Estilo (histórico)",
+            ["todos"] + style_options,
+            format_func=lambda x: "Todos" if x == "todos" else STYLE_LABELS.get(x, x),
+        )
+        style_param = None if style_filter == "todos" else style_filter
         days = st.slider("Días de historial", 7, 365, 90)
         auto_refresh = st.checkbox("Auto-refresh (60s)", value=False)
         if auto_refresh:
@@ -87,16 +102,27 @@ def main():
             st.rerun()
 
         st.divider()
+        st.markdown("**Estilos disponibles**")
+        for key, sc in TRADING_STYLES.items():
+            marker = "▶ " if key == active_style else "  "
+            st.caption(f"{marker}**{sc['label']}** — {sc['timeframe']} / HTF {sc['htf']}")
+        st.caption(
+            "Cambiar estilo: edita `TRADING_STYLE` en `.env` y reinicia el bot."
+        )
+
+        st.divider()
         st.markdown("**Acceso seguro**")
         st.caption(
             "Recomendado: túnel SSH\n\n"
             "`ssh -L 8501:localhost:8501 root@tu-vps`"
         )
 
-    status = get_bot_status()
-    metrics = get_metrics(mode, days)
-    closed = get_closed_trades_df(mode, days)
+    metrics = get_metrics(mode, days, style_param)
+    closed = get_closed_trades_df(mode, days, style_param)
     open_df = get_open_trades_df(mode)
+    if style_param and not open_df.empty and "trading_style" in open_df.columns:
+        open_df = open_df[
+            (open_df["trading_style"] == style_param) | open_df["trading_style"].isna()]
     signals = get_signals_df(days=min(days, 30))
 
     # ── Alertas de estado ─────────────────────────────────

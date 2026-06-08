@@ -2,21 +2,25 @@
 dashboard_data.py — Consultas de solo lectura para el dashboard Streamlit
 """
 import pandas as pd
+import config as cfg
 from bot.database import get_conn, compute_metrics, get_state, get_active_params
+from bot.trading_styles import TRADING_STYLES
 
 
-def get_trades_df(mode: str = "shadow", days: int = 90) -> pd.DataFrame:
+def get_trades_df(mode: str = "shadow", days: int = 90,
+                  trading_style: str | None = None) -> pd.DataFrame:
     with get_conn() as conn:
-        df = pd.read_sql_query(
-            """
+        query = """
             SELECT * FROM trades
             WHERE mode = ?
               AND entry_time >= datetime('now', ? || ' days')
-            ORDER BY entry_time ASC
-            """,
-            conn,
-            params=(mode, f"-{days}"),
-        )
+        """
+        params: list = [mode, f"-{days}"]
+        if trading_style:
+            query += " AND (trading_style = ? OR trading_style IS NULL)"
+            params.append(trading_style)
+        query += " ORDER BY entry_time ASC"
+        df = pd.read_sql_query(query, conn, params=params)
     if not df.empty:
         for col in ("entry_time", "exit_time", "created_at"):
             if col in df.columns:
@@ -24,8 +28,9 @@ def get_trades_df(mode: str = "shadow", days: int = 90) -> pd.DataFrame:
     return df
 
 
-def get_closed_trades_df(mode: str = "shadow", days: int = 90) -> pd.DataFrame:
-    df = get_trades_df(mode, days)
+def get_closed_trades_df(mode: str = "shadow", days: int = 90,
+                         trading_style: str | None = None) -> pd.DataFrame:
+    df = get_trades_df(mode, days, trading_style)
     if df.empty:
         return df
     return df[df["exit_time"].notna()].copy()
@@ -64,19 +69,26 @@ def get_signals_df(days: int = 30, limit: int = 200) -> pd.DataFrame:
     return df
 
 
-def get_metrics(mode: str = "shadow", days: int = 90) -> dict:
-    closed = get_closed_trades_df(mode, days)
+def get_metrics(mode: str = "shadow", days: int = 90,
+                trading_style: str | None = None) -> dict:
+    closed = get_closed_trades_df(mode, days, trading_style)
     if closed.empty:
         return {}
     return compute_metrics(closed.to_dict("records"))
 
 
 def get_bot_status() -> dict:
+    active_style = get_state("active_trading_style", cfg.TRADING_STYLE)
+    style_cfg = TRADING_STYLES.get(active_style, TRADING_STYLES["swing"])
     return {
         "bot_killed": bool(get_state("bot_killed", False)),
         "kill_reason": get_state("kill_reason"),
         "pause_until": get_state("pause_until"),
         "active_params": get_active_params(),
+        "trading_style": active_style,
+        "style_label": style_cfg.get("label", active_style),
+        "timeframe": style_cfg.get("timeframe", cfg.TIMEFRAME),
+        "htf": style_cfg.get("htf", cfg.HTF),
     }
 
 

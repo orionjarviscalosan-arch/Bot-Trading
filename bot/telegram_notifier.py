@@ -27,10 +27,12 @@ def send(text: str, parse_mode: str = "HTML") -> bool:
         return False
 
 
-def notify_start(mode: str, symbol: str):
+def notify_start(mode: str, symbol: str, style_label: str = "Swing",
+                 timeframe: str = "4h"):
     send(
         f"🤖 <b>Nextwaves Bot iniciado</b>\n"
         f"Modo: <b>{mode.upper()}</b>\n"
+        f"Estilo: <b>{style_label}</b> ({timeframe})\n"
         f"Par: {symbol}\n"
         f"Hora: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
     )

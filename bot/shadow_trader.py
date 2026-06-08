@@ -9,7 +9,7 @@ from bot.database import (save_trade, get_open_trade, close_trade,
                           compute_metrics, get_recent_trades, update_trade_stop_loss)
 from bot.signal_engine import get_signal
 from bot.order_manager import check_exit_conditions
-from config import SYMBOL, TIMEFRAME, SHADOW_CAPITAL, POSITION_SIZE_PCT
+from config import SYMBOL, TIMEFRAME, SHADOW_CAPITAL, POSITION_SIZE_PCT, TRADING_STYLE
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ def process_shadow_signal(state: dict, params: dict,
             "score_bear":  sc["score_bear"],
             "trail_level": state["trail_level"],
             "params_id":   None,
+            "trading_style": cfg.TRADING_STYLE,
         }
         save_trade(trade)
         logger.info(

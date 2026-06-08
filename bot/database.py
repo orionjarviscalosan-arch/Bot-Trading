@@ -97,7 +97,17 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
+        _migrate_schema(conn)
     logger.info("Base de datos inicializada")
+
+def _migrate_schema(conn):
+    """Añade columnas nuevas en bases de datos existentes."""
+    trade_cols = {r[1] for r in conn.execute("PRAGMA table_info(trades)").fetchall()}
+    if "trading_style" not in trade_cols:
+        conn.execute("ALTER TABLE trades ADD COLUMN trading_style TEXT DEFAULT 'swing'")
+    signal_cols = {r[1] for r in conn.execute("PRAGMA table_info(signals)").fetchall()}
+    if "trading_style" not in signal_cols:
+        conn.execute("ALTER TABLE signals ADD COLUMN trading_style TEXT DEFAULT 'swing'")
 
 # ── TRADES ────────────────────────────────────────────────
 
@@ -107,11 +117,13 @@ def save_trade(trade: dict):
             INSERT OR REPLACE INTO trades
             (trade_id, mode, side, symbol, timeframe, entry_time, entry_price,
              exit_time, exit_price, exit_reason, quantity, pnl_usdt, pnl_pct,
-             stop_loss, take_profit, score_bull, score_bear, trail_level, params_id)
+             stop_loss, take_profit, score_bull, score_bear, trail_level, params_id,
+             trading_style)
             VALUES
             (:trade_id, :mode, :side, :symbol, :timeframe, :entry_time, :entry_price,
              :exit_time, :exit_price, :exit_reason, :quantity, :pnl_usdt, :pnl_pct,
-             :stop_loss, :take_profit, :score_bull, :score_bear, :trail_level, :params_id)
+             :stop_loss, :take_profit, :score_bull, :score_bear, :trail_level, :params_id,
+             :trading_style)
         """, trade)
 
 def update_trade_stop_loss(trade_id: str, new_sl: float) -> bool:
@@ -163,11 +175,11 @@ def save_signal(signal: dict):
             INSERT INTO signals
             (timestamp, symbol, direction, score_bull, score_bear,
              trail_dir, htf_bull, htf_bear, struct_bias, regime_ok,
-             momentum_raw, acted_on)
+             momentum_raw, acted_on, trading_style)
             VALUES
             (:timestamp, :symbol, :direction, :score_bull, :score_bear,
              :trail_dir, :htf_bull, :htf_bear, :struct_bias, :regime_ok,
-             :momentum_raw, :acted_on)
+             :momentum_raw, :acted_on, :trading_style)
         """, signal)
 
 # ── PARÁMETROS ────────────────────────────────────────────

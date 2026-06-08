@@ -44,11 +44,25 @@ risk_manager = RiskManager(cfg.MAX_CAPITAL_USDT)
 
 
 def get_params() -> dict:
-    """Obtiene los parámetros activos de la DB o usa los defaults"""
+    """Obtiene parámetros activos; recarga preset si cambió TRADING_STYLE."""
+    stored_style = get_state("active_trading_style")
+    if stored_style != cfg.TRADING_STYLE:
+        logger.info(f"Cambio de estilo: {stored_style} → {cfg.TRADING_STYLE}")
+        for key, val in [
+            ("shadow_current_bar", 0), ("current_bar", 0),
+            ("shadow_last_long_bar", None), ("last_long_bar", None),
+        ]:
+            set_state(key, val)
+        params = cfg.SIGNAL_PARAMS.copy()
+        save_param_set(params, source=f"style_{cfg.TRADING_STYLE}")
+        set_state("active_trading_style", cfg.TRADING_STYLE)
+        return params
+
     params = get_active_params()
     if params is None:
         params = cfg.SIGNAL_PARAMS.copy()
-        save_param_set(params, source="initial")
+        save_param_set(params, source=f"style_{cfg.TRADING_STYLE}")
+        set_state("active_trading_style", cfg.TRADING_STYLE)
     return params
 
 
@@ -116,6 +130,7 @@ def on_candle_close():
         "regime_ok":    sc["regime_ok"],
         "momentum_raw": sc["momentum_raw"],
         "acted_on":     False,
+        "trading_style": cfg.TRADING_STYLE,
     }
 
     new_shadow_last = process_shadow_signal(state, params, shadow_last, shadow_bar)
@@ -236,6 +251,7 @@ def _open_long(state: dict, symbol: str, mode: str, params: dict) -> bool:
             "score_bear":  sc["score_bear"],
             "trail_level": state["trail_level"],
             "params_id":   None,
+            "trading_style": cfg.TRADING_STYLE,
         }
         save_trade(trade)
         notify_trade_open(result["entry_price"], result["stop_loss"],
@@ -265,6 +281,7 @@ def _open_long(state: dict, symbol: str, mode: str, params: dict) -> bool:
             "score_bear":  sc["score_bear"],
             "trail_level": state["trail_level"],
             "params_id":   None,
+            "trading_style": cfg.TRADING_STYLE,
         }
         save_trade(trade)
         notify_trade_open(entry, state["long_sl"], state["long_tp"], qty, mode)
@@ -350,8 +367,9 @@ def check_price_monitor():
 def main():
     logger.info("=" * 60)
     logger.info("  NEXTWAVES BOT — Iniciando")
-    logger.info(f"  Modo: {cfg.BOT_MODE.upper()}")
-    logger.info(f"  Par:  {cfg.SYMBOL} {cfg.TIMEFRAME}")
+    logger.info(f"  Modo:  {cfg.BOT_MODE.upper()}")
+    logger.info(f"  Estilo: {cfg.TRADING_STYLE_LABEL} ({cfg.TRADING_STYLE})")
+    logger.info(f"  Par:   {cfg.SYMBOL} {cfg.TIMEFRAME} · HTF {cfg.HTF}")
     logger.info("=" * 60)
 
     init_db()
@@ -367,7 +385,7 @@ def main():
         f"Parámetros activos: score={params['score_threshold']} | "
         f"trail={params['trail_mult']} | rr={params['rr_ratio']}")
 
-    notify_start(cfg.BOT_MODE, cfg.SYMBOL)
+    notify_start(cfg.BOT_MODE, cfg.SYMBOL, cfg.TRADING_STYLE_LABEL, cfg.TIMEFRAME)
 
     scheduler = BlockingScheduler(timezone="UTC")
 
@@ -381,7 +399,7 @@ def main():
 
     scheduler.add_job(
         check_price_monitor,
-        "interval", minutes=5,
+        "interval", minutes=cfg.PRICE_MONITOR_MINUTES,
         id="price_monitor", name="Monitor precio",
     )
 
