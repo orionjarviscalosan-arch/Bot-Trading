@@ -146,14 +146,49 @@ def get_recent_trades(mode="live", days=90):
         """, (mode, f"-{days}")).fetchall()
     return [dict(r) for r in rows]
 
-def get_open_trade(mode="live"):
+def get_open_trade(mode="live", symbol=None):
+    with get_conn() as conn:
+        if symbol:
+            row = conn.execute("""
+                SELECT * FROM trades
+                WHERE mode = ? AND symbol = ? AND exit_time IS NULL
+                ORDER BY entry_time DESC LIMIT 1
+            """, (mode, symbol)).fetchone()
+        else:
+            row = conn.execute("""
+                SELECT * FROM trades
+                WHERE mode = ? AND exit_time IS NULL
+                ORDER BY entry_time DESC LIMIT 1
+            """, (mode,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_open_trades(mode="live", symbols=None):
+    with get_conn() as conn:
+        if symbols:
+            placeholders = ",".join("?" * len(symbols))
+            rows = conn.execute(f"""
+                SELECT * FROM trades
+                WHERE mode = ? AND exit_time IS NULL
+                  AND symbol IN ({placeholders})
+                ORDER BY entry_time DESC
+            """, (mode, *symbols)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT * FROM trades
+                WHERE mode = ? AND exit_time IS NULL
+                ORDER BY entry_time DESC
+            """, (mode,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_open_trades(mode="live") -> int:
     with get_conn() as conn:
         row = conn.execute("""
-            SELECT * FROM trades
+            SELECT COUNT(*) AS n FROM trades
             WHERE mode = ? AND exit_time IS NULL
-            ORDER BY entry_time DESC LIMIT 1
         """, (mode,)).fetchone()
-    return dict(row) if row else None
+    return int(row["n"]) if row else 0
 
 def close_trade(trade_id, exit_price, exit_reason, pnl_usdt, pnl_pct) -> bool:
     """Cierra un trade. Devuelve False si ya estaba cerrado (evita doble cierre)."""

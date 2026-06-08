@@ -12,7 +12,8 @@ def _default_bot_mode() -> str:
 
 
 def get_trades_df(mode: str = "shadow", days: int = 90,
-                  trading_style: str | None = None) -> pd.DataFrame:
+                  trading_style: str | None = None,
+                  symbol: str | None = None) -> pd.DataFrame:
     with get_conn() as conn:
         query = """
             SELECT * FROM trades
@@ -23,6 +24,9 @@ def get_trades_df(mode: str = "shadow", days: int = 90,
         if trading_style:
             query += " AND (trading_style = ? OR trading_style IS NULL)"
             params.append(trading_style)
+        if symbol:
+            query += " AND symbol = ?"
+            params.append(symbol)
         query += " ORDER BY entry_time ASC"
         df = pd.read_sql_query(query, conn, params=params)
     if not df.empty:
@@ -33,8 +37,9 @@ def get_trades_df(mode: str = "shadow", days: int = 90,
 
 
 def get_closed_trades_df(mode: str = "shadow", days: int = 90,
-                         trading_style: str | None = None) -> pd.DataFrame:
-    df = get_trades_df(mode, days, trading_style)
+                         trading_style: str | None = None,
+                         symbol: str | None = None) -> pd.DataFrame:
+    df = get_trades_df(mode, days, trading_style, symbol)
     if df.empty:
         return df
     return df[df["exit_time"].notna()].copy()
@@ -74,8 +79,9 @@ def get_signals_df(days: int = 30, limit: int = 200) -> pd.DataFrame:
 
 
 def get_metrics(mode: str = "shadow", days: int = 90,
-                trading_style: str | None = None) -> dict:
-    closed = get_closed_trades_df(mode, days, trading_style)
+                trading_style: str | None = None,
+                symbol: str | None = None) -> dict:
+    closed = get_closed_trades_df(mode, days, trading_style, symbol)
     if closed.empty:
         return {}
     return compute_metrics(closed.to_dict("records"))
@@ -83,6 +89,9 @@ def get_metrics(mode: str = "shadow", days: int = 90,
 
 def get_bot_status() -> dict:
     """Estado del bot leyendo SQLite (sin depender del proceso del bot)."""
+    import config as cfg
+    from bot.database import count_open_trades
+
     active_style = resolve_active_style()
     style_cfg = TRADING_STYLES.get(active_style, TRADING_STYLES["swing"])
     bot_mode = _default_bot_mode()
@@ -96,6 +105,10 @@ def get_bot_status() -> dict:
         "timeframe": style_cfg.get("timeframe", "4h"),
         "htf": style_cfg.get("htf", "1d"),
         "bot_mode": bot_mode,
+        "trading_pairs": cfg.TRADING_PAIRS,
+        "max_active_pairs": cfg.MAX_ACTIVE_PAIRS,
+        "position_size_pct": cfg.POSITION_SIZE_PCT,
+        "open_positions": count_open_trades(bot_mode),
     }
 
 
@@ -107,25 +120,29 @@ def build_equity_curve(closed: pd.DataFrame) -> pd.DataFrame:
     return curve
 
 
-def enrich_open_trades(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None]:
-    """Añade precio actual y PnL no realizado a posiciones abiertas."""
+def enrich_open_trades(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Añade precio actual y PnL no realizado por símbolo."""
     if df.empty:
-        return df, None
+        return df, {}
 
-    import config as cfg
     from bot.data_fetcher import fetch_current_price
 
-    symbol = df.iloc[0].get("symbol") or cfg.SYMBOL
-    try:
-        current = fetch_current_price(symbol)
-    except Exception:
-        current = None
-
     out = df.copy()
-    if current is not None:
-        out["precio_actual"] = current
-        out["pnl_no_realizado"] = (out["precio_actual"] - out["entry_price"]) * out["quantity"]
-        out["pnl_pct_no_realizado"] = (
-            (out["precio_actual"] - out["entry_price"]) / out["entry_price"]
-        )
-    return out, current
+    prices: dict[str, float | None] = {}
+    for symbol in out["symbol"].dropna().unique():
+        try:
+            prices[str(symbol)] = fetch_current_price(str(symbol))
+        except Exception:
+            prices[str(symbol)] = None
+
+    out["precio_actual"] = out["symbol"].map(prices)
+    mask = out["precio_actual"].notna()
+    out.loc[mask, "pnl_no_realizado"] = (
+        (out.loc[mask, "precio_actual"] - out.loc[mask, "entry_price"])
+        * out.loc[mask, "quantity"]
+    )
+    out.loc[mask, "pnl_pct_no_realizado"] = (
+        (out.loc[mask, "precio_actual"] - out.loc[mask, "entry_price"])
+        / out.loc[mask, "entry_price"]
+    )
+    return out, prices

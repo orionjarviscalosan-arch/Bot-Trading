@@ -33,24 +33,36 @@ def calc_quantity(usdt_amount: float, price: float,
     return qty
 
 
-def place_market_buy(symbol: str, usdt_balance: float,
+def place_market_buy(symbol: str, quote_balance: float,
                      stop_loss: float, take_profit: float,
-                     rr_ratio: float = 2.0) -> dict | None:
+                     rr_ratio: float = 2.0,
+                     capital_to_use: float | None = None) -> dict | None:
     """
-    Abre una posición long comprando BTC con USDT.
+    Abre una posición long en el par indicado.
     Devuelve el trade dict o None si falla.
     """
     ex = get_exchange()
+    base = symbol.split("/")[0]
+    quote = symbol.split("/")[1]
 
-    usdt_to_use = min(usdt_balance * POSITION_SIZE_PCT, MAX_CAPITAL_USDT)
-    if usdt_to_use < MIN_ORDER_USDT:
-        logger.warning(f"Capital insuficiente: {usdt_to_use:.2f} USDT < mínimo {MIN_ORDER_USDT}")
+    if capital_to_use is None:
+        capital_to_use = min(
+            quote_balance * POSITION_SIZE_PCT,
+            MAX_CAPITAL_USDT * POSITION_SIZE_PCT,
+        )
+    else:
+        capital_to_use = min(capital_to_use, quote_balance)
+
+    if capital_to_use < MIN_ORDER_USDT:
+        logger.warning(
+            f"Capital insuficiente en {symbol}: "
+            f"{capital_to_use:.2f} {quote} < mínimo {MIN_ORDER_USDT}")
         return None
 
     ticker = ex.fetch_ticker(symbol)
     price  = float(ticker["last"])
 
-    qty = calc_quantity(usdt_to_use, price, symbol)
+    qty = calc_quantity(capital_to_use, price, symbol)
     if qty == 0:
         return None
 
@@ -64,7 +76,7 @@ def place_market_buy(symbol: str, usdt_balance: float,
         actual_sl   = fill_price - sl_distance
         actual_tp   = fill_price + sl_distance * rr_ratio
 
-        logger.info(f"✅ BUY {fill_qty:.6f} BTC @ {fill_price:.2f} USDT")
+        logger.info(f"✅ BUY {fill_qty:.6f} {base} @ {fill_price:.2f} {quote}")
         logger.info(f"   SL: {actual_sl:.2f}  TP: {actual_tp:.2f}  R:R {rr_ratio}x")
 
         return {
@@ -86,21 +98,23 @@ def place_market_buy(symbol: str, usdt_balance: float,
         return None
 
 
-def place_market_sell(symbol: str, btc_quantity: float,
+def place_market_sell(symbol: str, base_quantity: float,
                       reason: str = "signal") -> dict | None:
-    """Cierra la posición long vendiendo todo el BTC."""
+    """Cierra la posición long vendiendo el activo base."""
     ex = get_exchange()
+    base = symbol.split("/")[0]
+    quote = symbol.split("/")[1]
 
-    if btc_quantity <= 0:
-        logger.warning("Cantidad BTC a vender es cero o negativa")
+    if base_quantity <= 0:
+        logger.warning(f"Cantidad {base} a vender es cero o negativa")
         return None
 
     try:
-        order = ex.create_market_sell_order(symbol, btc_quantity)
+        order = ex.create_market_sell_order(symbol, base_quantity)
         fill_price = float(order.get("average") or order.get("price") or 0)
-        fill_qty   = float(order.get("filled")  or btc_quantity)
+        fill_qty   = float(order.get("filled")  or base_quantity)
 
-        logger.info(f"✅ SELL {fill_qty:.6f} BTC @ {fill_price:.2f} USDT ({reason})")
+        logger.info(f"✅ SELL {fill_qty:.6f} {base} @ {fill_price:.2f} {quote} ({reason})")
 
         return {
             "order_id":   order["id"],

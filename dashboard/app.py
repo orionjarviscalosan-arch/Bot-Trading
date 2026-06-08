@@ -85,15 +85,20 @@ def _pnl_cell_class(pnl) -> str:
 
 def render_open_positions_table(open_df: pd.DataFrame) -> None:
     """Tabla HTML con scroll lateral y colores según PnL no realizado."""
-    enriched, current_price = enrich_open_trades(open_df)
+    enriched, prices = enrich_open_trades(open_df)
 
-    if current_price is None:
+    if not prices or all(v is None for v in prices.values()):
         st.warning(
             "No se pudo obtener el precio actual de Binance. "
             "Se muestran los datos de la posición sin PnL en vivo."
         )
-    else:
-        st.caption(f"Precio de mercado: **{fmt_num(current_price)} USDT**")
+    elif prices:
+        price_lines = [
+            f"**{sym}**: {fmt_num(px)}"
+            for sym, px in prices.items() if px is not None
+        ]
+        if price_lines:
+            st.caption("Precios actuales · " + " · ".join(price_lines))
 
     columns = [
         ("trade_id", "ID"),
@@ -227,9 +232,12 @@ def main():
     active_style = status.get("trading_style", "swing")
     style_label = status.get("style_label", STYLE_LABELS.get(active_style, active_style))
     tf = status.get("timeframe", "4h")
+    pairs_label = ", ".join(status.get("trading_pairs", cfg.TRADING_PAIRS))
     st.caption(
-        f"{cfg.SYMBOL} · **{style_label}** ({tf}) · "
-        f"modo: **{status.get('bot_mode', 'shadow')}** · HTF {status.get('htf', '1d')}"
+        f"**{pairs_label}** · **{style_label}** ({tf}) · "
+        f"modo: **{status.get('bot_mode', 'shadow')}** · HTF {status.get('htf', '1d')} · "
+        f"máx **{status.get('max_active_pairs', cfg.MAX_ACTIVE_PAIRS)}** pares · "
+        f"{status.get('position_size_pct', cfg.POSITION_SIZE_PCT):.0%}/par"
     )
 
     with st.sidebar:
@@ -242,6 +250,9 @@ def main():
             format_func=lambda x: "Todos" if x == "todos" else STYLE_LABELS.get(x, x),
         )
         style_param = None if style_filter == "todos" else style_filter
+        pair_options = ["todos"] + list(cfg.TRADING_PAIRS)
+        symbol_filter = st.selectbox("Par (histórico)", pair_options)
+        symbol_param = None if symbol_filter == "todos" else symbol_filter
         days = st.slider("Días de historial", 7, 365, 90)
         auto_refresh = st.checkbox("Auto-refresh (60s)", value=False)
         if auto_refresh:
@@ -256,6 +267,15 @@ def main():
             if st.button("Cerrar sesión"):
                 clear_session(get_cookie_manager())
                 st.rerun()
+
+        st.divider()
+        st.markdown("**Pares activos**")
+        for sym in cfg.TRADING_PAIRS:
+            st.caption(f"· `{sym}`")
+        st.caption(
+            f"Máx. simultáneos: **{cfg.MAX_ACTIVE_PAIRS}** · "
+            f"{cfg.POSITION_SIZE_PCT:.0%} capital/par"
+        )
 
         st.divider()
         st.markdown("**Estilos disponibles**")
@@ -273,9 +293,11 @@ def main():
             "`ssh -L 8501:localhost:8501 root@tu-vps`"
         )
 
-    metrics = get_metrics(mode, days, style_param)
-    closed = get_closed_trades_df(mode, days, style_param)
+    metrics = get_metrics(mode, days, style_param, symbol_param)
+    closed = get_closed_trades_df(mode, days, style_param, symbol_param)
     open_df = get_open_trades_df(mode)
+    if symbol_param and not open_df.empty and "symbol" in open_df.columns:
+        open_df = open_df[open_df["symbol"] == symbol_param]
     if style_param and not open_df.empty and "trading_style" in open_df.columns:
         open_df = open_df[
             (open_df["trading_style"] == style_param) | open_df["trading_style"].isna()]
@@ -288,15 +310,18 @@ def main():
         st.warning(f"Bot en pausa hasta: {status.get('pause_until')}")
 
     # ── KPIs ──────────────────────────────────────────────
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Trades cerrados", metrics.get("total_trades", 0))
-    c2.metric("Win Rate", f"{metrics.get('win_rate', 0):.1%}" if metrics else "—")
-    c3.metric("Profit Factor", metrics.get("profit_factor", "—"))
-    c4.metric("PnL neto", fmt_usdt(metrics.get("net_pnl")) if metrics else "—")
-    c5.metric("Max Drawdown", f"{metrics.get('max_drawdown', 0):.1%}" if metrics else "—")
+    open_count = len(open_df)
+    max_pairs = status.get("max_active_pairs", cfg.MAX_ACTIVE_PAIRS)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Posiciones abiertas", f"{open_count}/{max_pairs}")
+    c2.metric("Trades cerrados", metrics.get("total_trades", 0))
+    c3.metric("Win Rate", f"{metrics.get('win_rate', 0):.1%}" if metrics else "—")
+    c4.metric("Profit Factor", metrics.get("profit_factor", "—"))
+    c5.metric("PnL neto", fmt_usdt(metrics.get("net_pnl")) if metrics else "—")
+    c6.metric("Max Drawdown", f"{metrics.get('max_drawdown', 0):.1%}" if metrics else "—")
 
     # ── Resumen posiciones abiertas ───────────────────────
-    st.subheader("Posición abierta")
+    st.subheader("Posiciones abiertas")
     if open_df.empty:
         st.info("Sin posición abierta en este modo.")
     else:
@@ -370,7 +395,7 @@ def main():
             st.info("Sin operaciones cerradas en el periodo seleccionado.")
         else:
             display = closed[[
-                "entry_time", "exit_time", "entry_price", "exit_price",
+                "symbol", "entry_time", "exit_time", "entry_price", "exit_price",
                 "pnl_usdt", "pnl_pct", "exit_reason", "quantity",
                 "score_bull", "score_bear",
             ]].sort_values("exit_time", ascending=False).copy()
@@ -397,7 +422,7 @@ def main():
             st.info("Sin señales registradas aún. El bot evalúa en cada cierre de vela 4H.")
         else:
             sig_display = signals[[
-                "timestamp", "direction", "score_bull", "score_bear",
+                "timestamp", "symbol", "direction", "score_bull", "score_bear",
                 "trail_dir", "htf_bull", "regime_ok", "acted_on",
             ]].copy()
             st.dataframe(sig_display, use_container_width=True, hide_index=True)

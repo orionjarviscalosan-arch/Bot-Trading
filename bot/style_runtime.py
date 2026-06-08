@@ -13,6 +13,7 @@ from bot.trading_styles import (
     normalize_style, get_style_config, apply_style_to_signal_params,
     STYLE_LABELS, VALID_STYLES,
 )
+from bot.pairs import bar_state_keys
 from bot.scheduler_utils import candle_close_trigger, candle_close_description
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -89,6 +90,12 @@ def get_runtime() -> RuntimeConfig:
 
 
 def _reset_bar_counters() -> None:
+    for symbol in cfg.TRADING_PAIRS:
+        for prefix in ("shadow_", ""):
+            cur_key, last_key = bar_state_keys(prefix, symbol)
+            set_state(cur_key, 0)
+            set_state(last_key, None)
+    # Limpiar keys legacy (pre multi-par)
     for key, val in [
         ("shadow_current_bar", 0), ("current_bar", 0),
         ("shadow_last_long_bar", None), ("last_long_bar", None),
@@ -181,24 +188,66 @@ def apply_live_confirmed() -> str:
 
 
 def get_status_message() -> str:
+    from bot.database import get_open_trades, count_open_trades
+
     rt = get_runtime()
     killed = get_state("bot_killed", False)
     pause = get_state("pause_until")
+    open_trades = get_open_trades(rt.bot_mode)
+    open_count = count_open_trades(rt.bot_mode)
+
     lines = [
-        f"📊 <b>Estado del bot</b>",
+        "📊 <b>Estado del bot</b>",
         f"Estilo: <b>{rt.label}</b> ({rt.timeframe} / HTF {rt.htf})",
         f"Modo: <b>{rt.bot_mode.upper()}</b>",
-        f"Par: {cfg.SYMBOL}",
+        f"Pares ({len(cfg.TRADING_PAIRS)}):",
+        " · ".join(f"<code>{p}</code>" for p in cfg.TRADING_PAIRS),
+        f"Posiciones: <b>{open_count}/{cfg.MAX_ACTIVE_PAIRS}</b> · "
+        f"{cfg.POSITION_SIZE_PCT:.0%} capital/par",
         f"Score mín: {rt.signal_params['score_threshold']} · "
         f"R:R {rt.signal_params['rr_ratio']} · "
         f"Cooldown {rt.signal_params['cooldown_bars']} velas",
     ]
+    if open_trades:
+        lines.append("<b>Abiertas:</b>")
+        for t in open_trades:
+            sym = t.get("symbol", "?")
+            entry = t.get("entry_price", 0)
+            lines.append(f"  · {sym} @ {entry:,.4f}")
     if killed:
         lines.append(f"🚨 Kill switch: {get_state('kill_reason', '—')}")
     elif pause:
         lines.append(f"⏸ Pausa hasta: {pause}")
     else:
         lines.append("✅ Operativo")
+    return "\n".join(lines)
+
+
+def get_pairs_message() -> str:
+    from bot.database import get_open_trades, count_open_trades
+    from bot.pairs import symbol_base_asset
+
+    rt = get_runtime()
+    open_by_symbol = {t["symbol"]: t for t in get_open_trades(rt.bot_mode)}
+    open_count = count_open_trades(rt.bot_mode)
+
+    lines = [
+        "📈 <b>Pares configurados</b>",
+        f"Máx. simultáneos: <b>{cfg.MAX_ACTIVE_PAIRS}</b> · "
+        f"Capital/par: <b>{cfg.POSITION_SIZE_PCT:.0%}</b>",
+        f"Activas ahora: <b>{open_count}</b>",
+        "",
+    ]
+    for sym in cfg.TRADING_PAIRS:
+        base = symbol_base_asset(sym)
+        trade = open_by_symbol.get(sym)
+        if trade:
+            lines.append(
+                f"🟢 <b>{sym}</b> — LONG @ {trade['entry_price']:,.4f} "
+                f"({base} {trade['quantity']:.4f})"
+            )
+        else:
+            lines.append(f"⚪ <code>{sym}</code> — sin posición")
     return "\n".join(lines)
 
 
@@ -216,5 +265,6 @@ def get_help_message() -> str:
         "/live confirmar — dinero real ⚠️\n\n"
         "<b>Info</b>\n"
         "/estado — resumen completo\n"
+        "/pares — posiciones por par\n"
         "/ayuda — este mensaje"
     )

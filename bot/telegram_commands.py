@@ -8,7 +8,7 @@ import config as cfg
 from bot.database import get_state, set_state
 from bot.style_runtime import (
     apply_style, apply_mode, apply_live_confirmed,
-    get_status_message, get_help_message,
+    get_status_message, get_help_message, get_pairs_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,9 @@ def _handle_command(chat_id: str, text: str) -> str | None:
 
     if cmd == "/estado":
         return get_status_message()
+
+    if cmd == "/pares":
+        return get_pairs_message()
 
     if cmd == "/estilo":
         from bot.style_runtime import get_runtime

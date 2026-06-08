@@ -23,7 +23,24 @@ TRADING_STYLE = normalize_style(os.getenv("TRADING_STYLE", "swing"))
 _style_cfg = get_style_config(TRADING_STYLE)
 
 # ── PAR Y TIMEFRAME (derivados del estilo) ───────────────
-SYMBOL     = os.getenv("SYMBOL", "BTC/USDT")
+_DEFAULT_PAIRS = (
+    "BTC/USDT,ETH/USDT,XRP/USDT,DOGE/USDT,BNB/USDT,SOL/USDC"
+)
+
+
+def _parse_trading_pairs() -> list[str]:
+    raw = os.getenv("TRADING_PAIRS", "").strip()
+    if raw:
+        return [p.strip() for p in raw.split(",") if p.strip()]
+    legacy = os.getenv("SYMBOL", "").strip()
+    if legacy:
+        return [legacy]
+    return [p.strip() for p in _DEFAULT_PAIRS.split(",") if p.strip()]
+
+
+TRADING_PAIRS    = _parse_trading_pairs()
+SYMBOL           = TRADING_PAIRS[0] if TRADING_PAIRS else "BTC/USDT"
+MAX_ACTIVE_PAIRS = int(os.getenv("MAX_ACTIVE_PAIRS", "3"))
 TIMEFRAME  = _style_cfg["timeframe"]
 HTF        = _style_cfg["htf"]
 CANDLES_LB = _style_cfg["candles_lb"]
@@ -33,7 +50,7 @@ TRADING_STYLE_LABEL   = _style_cfg["label"]
 # ── GESTIÓN DE CAPITAL ───────────────────────────────────
 MAX_CAPITAL_USDT  = float(os.getenv("MAX_CAPITAL_USDT", "1000.0"))
 SHADOW_CAPITAL    = float(os.getenv("SHADOW_CAPITAL", "10000.0"))
-POSITION_SIZE_PCT = float(os.getenv("POSITION_SIZE_PCT", "0.25"))
+POSITION_SIZE_PCT = float(os.getenv("POSITION_SIZE_PCT", "0.15"))
 MIN_ORDER_USDT    = 15.0
 
 # ── PARÁMETROS DE SEÑAL (base + preset del estilo) ─────

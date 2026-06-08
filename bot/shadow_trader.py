@@ -10,19 +10,20 @@ from bot.database import (save_trade, get_open_trade, close_trade,
 from bot.signal_engine import get_signal
 from bot.order_manager import check_exit_conditions
 from bot.style_runtime import get_runtime
-from config import SYMBOL, SHADOW_CAPITAL, POSITION_SIZE_PCT
+from bot.pairs import calc_order_capital, can_open_new_trade, bar_state_keys
 
 logger = logging.getLogger(__name__)
 
 
 def process_shadow_signal(state: dict, params: dict,
                            last_long_bar: int | None,
-                           current_bar: int) -> int | None:
+                           current_bar: int,
+                           symbol: str) -> int | None:
     """
     Simula trades shadow sin ejecutar órdenes reales.
     Devuelve el nuevo last_long_bar si abrió posición, None si no cambió.
     """
-    open_trade = get_open_trade(mode="shadow")
+    open_trade = get_open_trade(mode="shadow", symbol=symbol)
     has_position = open_trade is not None
     rt = get_runtime()
 
@@ -52,26 +53,31 @@ def process_shadow_signal(state: dict, params: dict,
             if close_trade(open_trade["trade_id"], price, exit_reason, pnl_usdt, pnl_pct):
                 emoji = "✅" if pnl_usdt > 0 else "❌"
                 logger.info(
-                    f"📋 [SHADOW] CLOSE {exit_reason} @ {price:.2f} | "
+                    f"📋 [SHADOW][{symbol}] CLOSE {exit_reason} @ {price:.2f} | "
                     f"PnL {pnl_usdt:+.2f} USDT ({pnl_pct:+.2%}) {emoji}"
                 )
             return None
 
     # ── ABRIR POSICIÓN SHADOW ─────────────────────────────
     if signal == "long" and not has_position:
+        ok, reason = can_open_new_trade("shadow", symbol)
+        if not ok:
+            logger.debug(f"[SHADOW][{symbol}] Long ignorado: {reason}")
+            return None
+
         trade_id = f"shadow_{uuid.uuid4().hex[:8]}"
         trade = {
             "trade_id":    trade_id,
             "mode":        "shadow",
             "side":        "long",
-            "symbol":      SYMBOL,
+            "symbol":      symbol,
             "timeframe":   rt.timeframe,
             "entry_time":  datetime.utcnow(),
             "entry_price": price,
             "exit_time":   None,
             "exit_price":  None,
             "exit_reason": None,
-            "quantity":    (SHADOW_CAPITAL * POSITION_SIZE_PCT) / price,
+            "quantity":    calc_order_capital("shadow") / price,
             "pnl_usdt":    None,
             "pnl_pct":     None,
             "stop_loss":   state["long_sl"],
@@ -84,7 +90,7 @@ def process_shadow_signal(state: dict, params: dict,
         }
         save_trade(trade)
         logger.info(
-            f"📋 [SHADOW] OPEN LONG @ {price:.2f} | "
+            f"📋 [SHADOW][{symbol}] OPEN LONG @ {price:.2f} | "
             f"SL {state['long_sl']:.2f} | TP {state['long_tp']:.2f}"
         )
         return current_bar

@@ -5,6 +5,7 @@ import logging
 import requests
 from datetime import datetime
 from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+from bot.pairs import symbol_base_asset, symbol_quote_asset
 
 logger = logging.getLogger(__name__)
 
@@ -27,63 +28,75 @@ def send(text: str, parse_mode: str = "HTML") -> bool:
         return False
 
 
-def notify_start(mode: str, symbol: str, style_label: str = "Swing",
+def _format_pairs(pairs) -> str:
+    if isinstance(pairs, str):
+        return pairs
+    return ", ".join(pairs)
+
+
+def notify_start(mode: str, pairs, style_label: str = "Swing",
                  timeframe: str = "4h"):
     send(
         f"🤖 <b>Nextwaves Bot iniciado</b>\n"
         f"Modo: <b>{mode.upper()}</b>\n"
         f"Estilo: <b>{style_label}</b> ({timeframe})\n"
-        f"Par: {symbol}\n"
+        f"Pares: {_format_pairs(pairs)}\n"
         f"Hora: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
     )
 
 
-def notify_signal(score: dict, price: float, direction: str):
+def notify_signal(score: dict, price: float, direction: str, symbol: str):
+    quote = symbol_quote_asset(symbol)
     emoji = "🟢" if direction == "long" else "🔴"
     send(
-        f"{emoji} <b>Señal detectada: {direction.upper()}</b>\n"
-        f"Precio: {price:,.2f} USDT\n"
+        f"{emoji} <b>Señal {direction.upper()} — {symbol}</b>\n"
+        f"Precio: {price:,.4f} {quote}\n"
         f"Score Bull: <b>{score['score_bull']}</b>  |  Bear: <b>{score['score_bear']}</b>\n"
         f"HTF: {'✅ Bull' if score['htf_bull'] else '❌'}\n"
-        f"Estructura: {'CHoCH ↑' if score['bull_choch_recent'] else 'BOS ↑' if score['bull_bos_recent'] else '–'}\n"
+        f"Estructura: {'CHoCH ↑' if score.get('bull_choch_recent') else 'BOS ↑' if score.get('bull_bos_recent') else '–'}\n"
         f"Momentum: {score['momentum_raw']:+.3f}\n"
         f"Régimen: {'✅ Tendencia' if score['regime_ok'] else '⚠️ Lateral'}"
     )
 
 
 def notify_trade_open(entry_price: float, stop_loss: float,
-                      take_profit: float, quantity: float, mode: str):
+                      take_profit: float, quantity: float, mode: str,
+                      symbol: str):
+    base = symbol_base_asset(symbol)
+    quote = symbol_quote_asset(symbol)
     rr = abs(take_profit - entry_price) / abs(entry_price - stop_loss)
     send(
         f"{'💰' if mode == 'live' else '📋'} <b>TRADE ABIERTO [{mode.upper()}]</b>\n"
-        f"Entry:  <b>{entry_price:,.2f} USDT</b>\n"
-        f"SL:     {stop_loss:,.2f} USDT\n"
-        f"TP:     {take_profit:,.2f} USDT\n"
+        f"Par:    <b>{symbol}</b>\n"
+        f"Entry:  <b>{entry_price:,.4f} {quote}</b>\n"
+        f"SL:     {stop_loss:,.4f} {quote}\n"
+        f"TP:     {take_profit:,.4f} {quote}\n"
         f"R:R:    {rr:.2f}x\n"
-        f"Qty:    {quantity:.6f} BTC"
+        f"Qty:    {quantity:.6f} {base}"
     )
 
 
 def notify_trade_close(entry: float, exit_price: float, pnl_usdt: float,
-                       pnl_pct: float, reason: str, mode: str):
+                       pnl_pct: float, reason: str, mode: str, symbol: str):
     emoji = "✅" if pnl_usdt > 0 else "❌"
     reason_map = {"sl": "Stop Loss", "tp": "Take Profit",
                   "trail_flip": "Trail Flip", "score_bear": "Score bajista",
                   "manual": "Manual"}
     send(
         f"{emoji} <b>TRADE CERRADO [{mode.upper()}]</b>\n"
+        f"Par:    <b>{symbol}</b>\n"
         f"Motivo: {reason_map.get(reason, reason)}\n"
-        f"Entry:  {entry:,.2f}\n"
-        f"Exit:   {exit_price:,.2f}\n"
+        f"Entry:  {entry:,.4f}\n"
+        f"Exit:   {exit_price:,.4f}\n"
         f"PnL:    <b>{pnl_usdt:+.2f} USDT ({pnl_pct:+.2%})</b>"
     )
 
 
-def notify_trail_update(old_sl: float, new_sl: float):
+def notify_trail_update(old_sl: float, new_sl: float, symbol: str):
     send(
-        f"📈 <b>Trail actualizado</b>\n"
-        f"SL anterior: {old_sl:,.2f}\n"
-        f"SL nuevo:    {new_sl:,.2f} (+{new_sl-old_sl:.2f})"
+        f"📈 <b>Trail actualizado — {symbol}</b>\n"
+        f"SL anterior: {old_sl:,.4f}\n"
+        f"SL nuevo:    {new_sl:,.4f} (+{new_sl-old_sl:.4f})"
     )
 
 
