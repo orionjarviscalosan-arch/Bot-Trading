@@ -18,9 +18,13 @@ def symbol_quote_asset(symbol: str) -> str:
     return symbol.split("/")[1]
 
 
-def bar_state_keys(prefix: str, symbol: str) -> tuple[str, str]:
+def bar_state_keys(prefix: str, symbol: str) -> tuple[str, str, str]:
     sk = symbol_key(symbol)
-    return f"{prefix}{sk}_current_bar", f"{prefix}{sk}_last_long_bar"
+    return (
+        f"{prefix}{sk}_current_bar",
+        f"{prefix}{sk}_last_long_bar",
+        f"{prefix}{sk}_last_short_bar",
+    )
 
 
 def unique_quote_assets(pairs: list[str] | None = None) -> list[str]:

@@ -176,12 +176,24 @@ def enrich_open_trades(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
     out["precio_actual"] = out["symbol"].map(prices)
     mask = out["precio_actual"].notna()
-    out.loc[mask, "pnl_no_realizado"] = (
-        (out.loc[mask, "precio_actual"] - out.loc[mask, "entry_price"])
-        * out.loc[mask, "quantity"]
+    sides = out.loc[mask, "side"].fillna("long")
+    long_mask = mask & (sides != "short")
+    short_mask = mask & (sides == "short")
+
+    out.loc[long_mask, "pnl_no_realizado"] = (
+        (out.loc[long_mask, "precio_actual"] - out.loc[long_mask, "entry_price"])
+        * out.loc[long_mask, "quantity"]
     )
-    out.loc[mask, "pnl_pct_no_realizado"] = (
-        (out.loc[mask, "precio_actual"] - out.loc[mask, "entry_price"])
-        / out.loc[mask, "entry_price"]
+    out.loc[long_mask, "pnl_pct_no_realizado"] = (
+        (out.loc[long_mask, "precio_actual"] - out.loc[long_mask, "entry_price"])
+        / out.loc[long_mask, "entry_price"]
+    )
+    out.loc[short_mask, "pnl_no_realizado"] = (
+        (out.loc[short_mask, "entry_price"] - out.loc[short_mask, "precio_actual"])
+        * out.loc[short_mask, "quantity"]
+    )
+    out.loc[short_mask, "pnl_pct_no_realizado"] = (
+        (out.loc[short_mask, "entry_price"] - out.loc[short_mask, "precio_actual"])
+        / out.loc[short_mask, "entry_price"]
     )
     return out, prices

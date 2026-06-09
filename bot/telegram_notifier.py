@@ -48,12 +48,24 @@ def notify_start(mode: str, pairs, style_label: str = "Swing",
 def notify_signal(score: dict, price: float, direction: str, symbol: str):
     quote = symbol_quote_asset(symbol)
     emoji = "🟢" if direction == "long" else "🔴"
+    if direction == "short":
+        htf_line = f"HTF: {'✅ Bear' if score['htf_bear'] else '❌'}"
+        struct_line = (
+            "Estructura: "
+            f"{'CHoCH ↓' if score.get('bear_choch_recent') else 'BOS ↓' if score.get('bear_bos_recent') else '–'}"
+        )
+    else:
+        htf_line = f"HTF: {'✅ Bull' if score['htf_bull'] else '❌'}"
+        struct_line = (
+            "Estructura: "
+            f"{'CHoCH ↑' if score.get('bull_choch_recent') else 'BOS ↑' if score.get('bull_bos_recent') else '–'}"
+        )
     send(
         f"{emoji} <b>Señal {direction.upper()} — {symbol}</b>\n"
         f"Precio: {price:,.4f} {quote}\n"
         f"Score Bull: <b>{score['score_bull']}</b>  |  Bear: <b>{score['score_bear']}</b>\n"
-        f"HTF: {'✅ Bull' if score['htf_bull'] else '❌'}\n"
-        f"Estructura: {'CHoCH ↑' if score.get('bull_choch_recent') else 'BOS ↑' if score.get('bull_bos_recent') else '–'}\n"
+        f"{htf_line}\n"
+        f"{struct_line}\n"
         f"Momentum: {score['momentum_raw']:+.3f}\n"
         f"Régimen: {'✅ Tendencia' if score['regime_ok'] else '⚠️ Lateral'}"
     )
@@ -81,7 +93,7 @@ def notify_trade_close(entry: float, exit_price: float, pnl_usdt: float,
     emoji = "✅" if pnl_usdt > 0 else "❌"
     reason_map = {"sl": "Stop Loss", "tp": "Take Profit",
                   "trail_flip": "Trail Flip", "score_bear": "Score bajista",
-                  "manual": "Manual"}
+                  "score_bull": "Score alcista", "manual": "Manual"}
     send(
         f"{emoji} <b>TRADE CERRADO [{mode.upper()}]</b>\n"
         f"Par:    <b>{symbol}</b>\n"

@@ -19,7 +19,8 @@ from bot.database      import (init_db, get_active_params, save_param_set,
 from bot.data_fetcher  import (fetch_ohlcv, fetch_balance, fetch_base_balance,
                                 fetch_current_price)
 from bot.signal_engine import compute_all, get_signal
-from bot.order_manager import place_market_buy, place_market_sell, check_exit_conditions
+from bot.order_manager import (place_market_buy, place_market_sell, check_exit_conditions,
+                                calc_trade_pnl, compute_trailing_stop, trade_side)
 from bot.risk_manager  import RiskManager
 from bot.shadow_trader import process_shadow_signal, get_shadow_metrics
 from bot.optimizer     import should_run_optimization, run_optimization, maybe_promote_candidate
@@ -57,17 +58,21 @@ def get_params() -> dict:
 
 
 def _persist_bar_state(prefix: str, symbol: str,
-                       current_bar: int, last_long_bar: int | None):
-    cur_key, last_key = bar_state_keys(prefix, symbol)
+                       current_bar: int,
+                       last_long_bar: int | None,
+                       last_short_bar: int | None = None):
+    cur_key, last_long_key, last_short_key = bar_state_keys(prefix, symbol)
     set_state(cur_key, current_bar)
-    set_state(last_key, last_long_bar)
+    set_state(last_long_key, last_long_bar)
+    set_state(last_short_key, last_short_bar)
 
 
-def _load_bar_state(prefix: str, symbol: str) -> tuple[int, int | None]:
-    cur_key, last_key = bar_state_keys(prefix, symbol)
+def _load_bar_state(prefix: str, symbol: str) -> tuple[int, int | None, int | None]:
+    cur_key, last_long_key, last_short_key = bar_state_keys(prefix, symbol)
     current = get_state(cur_key, 0)
-    last_long = get_state(last_key)
-    return current, last_long
+    last_long = get_state(last_long_key)
+    last_short = get_state(last_short_key)
+    return current, last_long, last_short
 
 
 def _estimate_equity(mode: str) -> float:
@@ -80,7 +85,7 @@ def _estimate_equity(mode: str) -> float:
 
 
 def _process_symbol_candle_close(symbol: str, rt, mode: str, params: dict):
-    shadow_bar, shadow_last = _load_bar_state("shadow_", symbol)
+    shadow_bar, shadow_last_long, shadow_last_short = _load_bar_state("shadow_", symbol)
     shadow_bar += 1
 
     try:
@@ -115,26 +120,30 @@ def _process_symbol_candle_close(symbol: str, rt, mode: str, params: dict):
         "trading_style": rt.style,
     }
 
-    new_shadow_last = process_shadow_signal(
-        state, params, shadow_last, shadow_bar, symbol)
-    if new_shadow_last is not None:
-        shadow_last = new_shadow_last
-    _persist_bar_state("shadow_", symbol, shadow_bar, shadow_last)
+    new_long, new_short = process_shadow_signal(
+        state, params, shadow_last_long, shadow_last_short, shadow_bar, symbol)
+    if new_long is not None:
+        shadow_last_long = new_long
+    if new_short is not None:
+        shadow_last_short = new_short
+    _persist_bar_state(
+        "shadow_", symbol, shadow_bar, shadow_last_long, shadow_last_short)
 
     if mode in ("live", "paper"):
-        current_bar, last_long_bar = _load_bar_state("", symbol)
+        current_bar, last_long_bar, last_short_bar = _load_bar_state("", symbol)
         current_bar += 1
 
         open_trade = get_open_trade(mode=mode, symbol=symbol)
-        has_pos    = open_trade is not None
 
-        if has_pos:
+        if open_trade:
             _manage_open_position(open_trade, state, price, mode, symbol, params)
 
         open_trade = get_open_trade(mode=mode, symbol=symbol)
-        has_pos    = open_trade is not None
+        has_pos = open_trade is not None
 
-        signal = get_signal(state, params, last_long_bar, current_bar, has_pos)
+        signal = get_signal(
+            state, params, last_long_bar, last_short_bar,
+            current_bar, open_trade)
         signal_rec["direction"] = signal
 
         if signal == "close" and has_pos and open_trade:
@@ -157,11 +166,25 @@ def _process_symbol_candle_close(symbol: str, rt, mode: str, params: dict):
             else:
                 logger.info(f"[{symbol}] Señal long ignorada: {skip_reason}")
 
-        _persist_bar_state("", symbol, current_bar, last_long_bar)
+        elif signal == "short" and not has_pos and mode == "paper":
+            ok, skip_reason = can_open_new_trade(mode, symbol)
+            if ok:
+                signal_rec["acted_on"] = True
+                logger.info(
+                    f"🔴 [{symbol}] SEÑAL SHORT | Bear {sc['score_bear']} | "
+                    f"Price: {price:.4f}")
+                notify_signal(sc, price, "short", symbol)
+                if _open_short(state, symbol, mode, params, rt):
+                    last_short_bar = current_bar
+            else:
+                logger.info(f"[{symbol}] Señal short ignorada: {skip_reason}")
+
+        _persist_bar_state("", symbol, current_bar, last_long_bar, last_short_bar)
     else:
+        open_trade = get_open_trade(mode="shadow", symbol=symbol)
         signal = get_signal(
-            state, params, shadow_last, shadow_bar,
-            get_open_trade(mode="shadow", symbol=symbol) is not None)
+            state, params, shadow_last_long, shadow_last_short,
+            shadow_bar, open_trade)
         signal_rec["direction"] = signal
 
     save_signal(signal_rec)
@@ -214,10 +237,15 @@ def _manage_open_position(open_trade, state, price, mode, symbol, params):
     trail_dir = state["trail_dir"]
     atr_val   = state["atr"]
     sc        = state["score"]
+    side      = trade_side(open_trade)
 
     old_sl = open_trade["stop_loss"]
-    new_sl = trail_lv - atr_val * 0.2
-    if new_sl > old_sl:
+    new_sl = compute_trailing_stop(trail_lv, atr_val, side)
+    should_update = (
+        (side == "short" and new_sl < old_sl) or
+        (side == "long" and new_sl > old_sl)
+    )
+    if should_update:
         if update_trade_stop_loss(open_trade["trade_id"], new_sl):
             if mode == "live":
                 notify_trail_update(old_sl, new_sl, symbol)
@@ -301,16 +329,51 @@ def _open_long(state, symbol, mode, params, rt) -> bool:
     return False
 
 
+def _open_short(state, symbol, mode, params, rt) -> bool:
+    """Abre short simulado (solo paper). Live sigue long-only."""
+    if mode != "paper":
+        return False
+
+    sc = state["score"]
+    entry = state["price"]
+    qty = calc_order_capital("paper") / entry
+    trade = {
+        "trade_id":      f"paper_{uuid.uuid4().hex[:8]}",
+        "mode":          "paper",
+        "side":          "short",
+        "symbol":        symbol,
+        "timeframe":     rt.timeframe,
+        "entry_time":    datetime.utcnow(),
+        "entry_price":   entry,
+        "exit_time":     None,
+        "exit_price":    None,
+        "exit_reason":   None,
+        "quantity":      qty,
+        "pnl_usdt":      None,
+        "pnl_pct":       None,
+        "stop_loss":     state["short_sl"],
+        "take_profit":   state["short_tp"],
+        "score_bull":    sc["score_bull"],
+        "score_bear":    sc["score_bear"],
+        "trail_level":   state["trail_level"],
+        "params_id":     None,
+        "trading_style": rt.style,
+    }
+    save_trade(trade)
+    notify_trade_open(entry, state["short_sl"], state["short_tp"], qty, mode, symbol)
+    return True
+
+
 def _close_position(open_trade, price, reason, mode, symbol, rt):
     if open_trade.get("exit_time"):
         return
 
-    entry    = open_trade["entry_price"]
-    qty      = open_trade["quantity"]
-    pnl_usdt = (price - entry) * qty
-    pnl_pct  = (price - entry) / entry
+    entry = open_trade["entry_price"]
+    qty   = open_trade["quantity"]
+    side  = trade_side(open_trade)
+    pnl_usdt, pnl_pct = calc_trade_pnl(entry, price, qty, side)
 
-    if mode == "live":
+    if mode == "live" and side == "long":
         base_bal = fetch_base_balance(symbol)
         if base_bal > 0:
             place_market_sell(symbol, min(qty, base_bal), reason)
@@ -353,19 +416,31 @@ def check_price_monitor():
 
     for open_trade in get_open_trades(mode):
         symbol = open_trade["symbol"]
+        side = trade_side(open_trade)
         try:
             price = fetch_current_price(symbol)
-            sl    = open_trade.get("stop_loss", 0)
-            tp    = open_trade.get("take_profit", 999999)
+            sl = open_trade.get("stop_loss", 0)
+            tp = open_trade.get("take_profit")
 
-            if price <= sl:
-                logger.warning(
-                    f"[{symbol}] SL tocado ({price:.4f} ≤ {sl:.4f}) — cerrando")
-                _close_position(open_trade, price, "sl", mode, symbol, rt)
-            elif price >= tp:
-                logger.info(
-                    f"[{symbol}] TP alcanzado ({price:.4f} ≥ {tp:.4f}) — cerrando")
-                _close_position(open_trade, price, "tp", mode, symbol, rt)
+            if side == "short":
+                if price >= sl:
+                    logger.warning(
+                        f"[{symbol}] SL short tocado ({price:.4f} ≥ {sl:.4f}) — cerrando")
+                    _close_position(open_trade, price, "sl", mode, symbol, rt)
+                elif tp is not None and price <= tp:
+                    logger.info(
+                        f"[{symbol}] TP short alcanzado ({price:.4f} ≤ {tp:.4f}) — cerrando")
+                    _close_position(open_trade, price, "tp", mode, symbol, rt)
+            else:
+                tp_long = tp if tp is not None else 999999
+                if price <= sl:
+                    logger.warning(
+                        f"[{symbol}] SL tocado ({price:.4f} ≤ {sl:.4f}) — cerrando")
+                    _close_position(open_trade, price, "sl", mode, symbol, rt)
+                elif price >= tp_long:
+                    logger.info(
+                        f"[{symbol}] TP alcanzado ({price:.4f} ≥ {tp:.4f}) — cerrando")
+                    _close_position(open_trade, price, "tp", mode, symbol, rt)
         except Exception as e:
             logger.error(f"[{symbol}] Error en monitoreo de precio: {e}")
 

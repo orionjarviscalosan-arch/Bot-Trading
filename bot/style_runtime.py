@@ -92,9 +92,10 @@ def get_runtime() -> RuntimeConfig:
 def _reset_bar_counters() -> None:
     for symbol in cfg.TRADING_PAIRS:
         for prefix in ("shadow_", ""):
-            cur_key, last_key = bar_state_keys(prefix, symbol)
+            cur_key, last_long_key, last_short_key = bar_state_keys(prefix, symbol)
             set_state(cur_key, 0)
-            set_state(last_key, None)
+            set_state(last_long_key, None)
+            set_state(last_short_key, None)
     # Limpiar keys legacy (pre multi-par)
     for key, val in [
         ("shadow_current_bar", 0), ("current_bar", 0),

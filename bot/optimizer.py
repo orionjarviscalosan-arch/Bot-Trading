@@ -8,6 +8,7 @@ from datetime import datetime
 from bot.database import (get_active_params, get_active_param_metrics, save_param_set,
                           get_recent_trades, compute_metrics, get_state, set_state)
 from bot.signal_engine import compute_all, get_signal
+from bot.order_manager import check_exit_conditions, calc_trade_pnl, compute_trailing_stop
 from bot.data_fetcher import fetch_ohlcv
 from config import OPTIMIZER, PARAM_GRID, SIGNAL_PARAMS, POSITION_SIZE_PCT
 
@@ -17,13 +18,14 @@ logger = logging.getLogger(__name__)
 def run_simulation(df_4h, df_1d, params: dict) -> dict:
     """
     Simula el backtest de un set de parámetros sobre datos históricos.
-    Devuelve las métricas del set.
+    Soporta long y short. Devuelve las métricas del set.
     """
-    trades  = []
+    trades = []
     capital = 10000.0
-    pos     = None
-    last_lb = None
-    bar_i   = 0
+    pos = None
+    last_long = None
+    last_short = None
+    bar_i = 0
     position_pct = params.get("position_size_pct", POSITION_SIZE_PCT)
 
     for i in range(300, len(df_4h)):
@@ -35,47 +37,65 @@ def run_simulation(df_4h, df_1d, params: dict) -> dict:
         except Exception:
             continue
 
-        price     = state["price"]
-        trail_lv  = state["trail_level"]
+        price = state["price"]
+        trail_lv = state["trail_level"]
         trail_dir = state["trail_dir"]
-        sc        = state["score"]
-        has_pos   = pos is not None
+        sc = state["score"]
 
-        signal = get_signal(state, params, last_lb, bar_i, has_pos)
+        open_trade = None
+        if pos is not None:
+            open_trade = {
+                "side": pos["side"],
+                "stop_loss": pos["sl"],
+                "take_profit": pos["tp"],
+            }
 
-        if has_pos:
-            exit_reason = None
-            if price <= pos["sl"]:
-                exit_reason = "sl"
-            elif price >= pos["tp"]:
-                exit_reason = "tp"
-            elif trail_dir == -1:
-                exit_reason = "trail_flip"
-            elif sc["score_bear"] >= params.get("score_threshold", 68):
-                exit_reason = "score_bear"
+        signal = get_signal(state, params, last_long, last_short, bar_i, open_trade)
+
+        if pos is not None:
+            exit_reason = check_exit_conditions(
+                price, open_trade, trail_lv, trail_dir, score=sc, params=params)
 
             if exit_reason:
-                pnl = (price - pos["entry"]) * pos["qty"]
+                pnl, _ = calc_trade_pnl(pos["entry"], price, pos["qty"], pos["side"])
                 trades.append(pnl)
                 pos = None
             else:
-                new_sl = trail_lv - state["atr"] * 0.2
-                if new_sl > pos["sl"]:
+                new_sl = compute_trailing_stop(trail_lv, state["atr"], pos["side"])
+                if pos["side"] == "short" and new_sl < pos["sl"]:
+                    pos["sl"] = new_sl
+                elif pos["side"] == "long" and new_sl > pos["sl"]:
                     pos["sl"] = new_sl
 
         if signal == "long" and pos is None:
             entry = price
-            sl    = state["long_sl"]
-            tp    = state["long_tp"]
-            qty   = (capital * position_pct) / entry
-            pos   = {"entry": entry, "sl": sl, "tp": tp, "qty": qty}
-            last_lb = bar_i
+            qty = (capital * position_pct) / entry
+            pos = {
+                "side": "long",
+                "entry": entry,
+                "sl": state["long_sl"],
+                "tp": state["long_tp"],
+                "qty": qty,
+            }
+            last_long = bar_i
+
+        elif signal == "short" and pos is None:
+            entry = price
+            qty = (capital * position_pct) / entry
+            pos = {
+                "side": "short",
+                "entry": entry,
+                "sl": state["short_sl"],
+                "tp": state["short_tp"],
+                "qty": qty,
+            }
+            last_short = bar_i
 
         bar_i += 1
 
     if pos:
         last_price = df_4h["close"].iloc[-1]
-        pnl = (last_price - pos["entry"]) * pos["qty"]
+        pnl, _ = calc_trade_pnl(pos["entry"], last_price, pos["qty"], pos["side"])
         trades.append(pnl)
 
     return compute_metrics([{"pnl_usdt": p} for p in trades])

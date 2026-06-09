@@ -25,6 +25,7 @@ from bot.dashboard_data import (
     get_signals_df, get_metrics, get_bot_status, build_equity_curve,
     enrich_open_trades, get_db_summary,
 )
+from dashboard.charts import get_chart_ohlcv, build_trade_chart, CHART_CANDLE_LIMIT
 
 st.set_page_config(
     page_title="Nextwaves Bot Dashboard",
@@ -38,6 +39,7 @@ EXIT_LABELS = {
     "tp": "Take Profit",
     "trail_flip": "Trail Flip",
     "score_bear": "Score bajista",
+    "score_bull": "Score alcista",
     "manual": "Manual",
 }
 
@@ -448,9 +450,71 @@ def main():
 
     st.divider()
 
-    tab_open, tab_equity, tab_trades, tab_signals, tab_reasons = st.tabs(
-        ["Posiciones abiertas", "Curva de equity", "Operaciones", "Señales", "Por motivo de salida"]
+    tab_chart, tab_open, tab_equity, tab_trades, tab_signals, tab_reasons = st.tabs(
+        ["Gráfico", "Posiciones abiertas", "Curva de equity", "Operaciones", "Señales", "Por motivo de salida"]
     )
+
+    with tab_chart:
+        chart_pairs = list(cfg.TRADING_PAIRS)
+        default_chart_pair = chart_pairs[0] if chart_pairs else "BTC/USDT"
+        if "nw_chart_symbol" not in st.session_state:
+            st.session_state["nw_chart_symbol"] = default_chart_pair
+        if st.session_state["nw_chart_symbol"] not in chart_pairs:
+            st.session_state["nw_chart_symbol"] = default_chart_pair
+
+        c_sym, c_sig, c_unacted = st.columns([2, 1, 1])
+        with c_sym:
+            chart_symbol = st.selectbox(
+                "Par del gráfico",
+                chart_pairs,
+                index=_safe_index(chart_pairs, st.session_state["nw_chart_symbol"]),
+                key="nw_chart_symbol_select",
+            )
+            st.session_state["nw_chart_symbol"] = chart_symbol
+        with c_sig:
+            show_signal_markers = st.checkbox(
+                "Marcar señales actuadas", value=True, key="nw_chart_signals"
+            )
+        with c_unacted:
+            show_unacted = st.checkbox(
+                "Incluir señales no actuadas", value=False, key="nw_chart_unacted"
+            )
+
+        chart_tf = status.get("timeframe", tf)
+        chart_signals = signals if show_signal_markers else None
+        if chart_signals is not None and not chart_signals.empty and "symbol" in chart_signals.columns:
+            chart_signals = chart_signals[chart_signals["symbol"] == chart_symbol]
+
+        all_trades = get_trades_df(mode, days, style_param, chart_symbol)
+        chart_open = get_open_trades_df(mode)
+        if not chart_open.empty and "symbol" in chart_open.columns:
+            chart_open = chart_open[chart_open["symbol"] == chart_symbol]
+
+        try:
+            ohlcv = get_chart_ohlcv(chart_symbol, chart_tf, CHART_CANDLE_LIMIT)
+            fig_chart = build_trade_chart(
+                ohlcv=ohlcv,
+                trades=all_trades,
+                open_trades=chart_open,
+                symbol=chart_symbol,
+                timeframe=chart_tf,
+                signals=chart_signals,
+                show_unacted_signals=show_unacted,
+            )
+            st.plotly_chart(fig_chart, use_container_width=True)
+            n_closed = len(all_trades[all_trades["exit_time"].notna()]) if not all_trades.empty else 0
+            n_open = len(chart_open)
+            st.caption(
+                f"**{chart_symbol}** · velas **{chart_tf}** (últimas {len(ohlcv)}) · "
+                f"modo **{mode}** · {n_closed} cierre(s) · {n_open} abierta(s). "
+                "▲ LONG · ▼ SHORT · ● salida · ◆ señal · líneas punteadas SL/TP."
+            )
+        except Exception as exc:
+            st.error(f"No se pudo cargar el gráfico de {chart_symbol}: {exc}")
+            st.caption(
+                "Comprueba conexión a Binance y que las API keys del `.env` sean válidas "
+                "(solo lectura pública también funciona para OHLCV)."
+            )
 
     with tab_open:
         if open_df.empty:
@@ -548,11 +612,13 @@ def main():
             st.dataframe(sig_display, use_container_width=True, hide_index=True)
 
             longs = (signals["direction"] == "long").sum()
+            shorts = (signals["direction"] == "short").sum()
             acted = signals["acted_on"].astype(bool).sum()
-            sc1, sc2, sc3 = st.columns(3)
+            sc1, sc2, sc3, sc4 = st.columns(4)
             sc1.metric("Señales long", int(longs))
-            sc2.metric("Actuadas", int(acted))
-            sc3.metric("Total señales", len(signals))
+            sc2.metric("Señales short", int(shorts))
+            sc3.metric("Actuadas", int(acted))
+            sc4.metric("Total señales", len(signals))
 
     with tab_reasons:
         if closed.empty:

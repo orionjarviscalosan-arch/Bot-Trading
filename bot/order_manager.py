@@ -1,6 +1,6 @@
 """
 order_manager.py — Gestión de órdenes en Binance Spot
-Long-only: BUY BTC / SELL BTC
+Live: long-only (BUY / SELL). Paper/shadow: long + short simulados.
 """
 import ccxt
 import logging
@@ -10,6 +10,23 @@ from bot.data_fetcher import get_exchange, get_min_order_size
 from config import POSITION_SIZE_PCT, MAX_CAPITAL_USDT, MIN_ORDER_USDT
 
 logger = logging.getLogger(__name__)
+
+
+def trade_side(position: dict | None) -> str:
+    if not position:
+        return "long"
+    return position.get("side") or "long"
+
+
+def calc_trade_pnl(entry: float, exit_price: float, qty: float,
+                   side: str = "long") -> tuple[float, float]:
+    if side == "short":
+        pnl_usdt = (entry - exit_price) * qty
+        pnl_pct = (entry - exit_price) / entry if entry else 0.0
+    else:
+        pnl_usdt = (exit_price - entry) * qty
+        pnl_pct = (exit_price - entry) / entry if entry else 0.0
+    return pnl_usdt, pnl_pct
 
 
 def round_down(value: float, decimals: int) -> float:
@@ -137,15 +154,30 @@ def check_exit_conditions(current_price: float, position: dict,
                           score: dict | None = None,
                           params: dict | None = None) -> str | None:
     """
-    Verifica si se deben activar SL, TP, Trail Flip o cierre por score bajista.
-    Devuelve el motivo de salida o None si no hay salida.
+    Verifica SL, TP, trail flip o cierre por score contrario.
+    Soporta long y short (paper/shadow).
     """
+    side = trade_side(position)
     sl = position.get("stop_loss", 0)
-    tp = position.get("take_profit", 999999)
+    tp = position.get("take_profit")
 
+    if side == "short":
+        if current_price >= sl:
+            return "sl"
+        if tp is not None and current_price <= tp:
+            return "tp"
+        if trail_dir == 1:
+            return "trail_flip"
+        if score and params:
+            threshold = params.get("score_threshold", 68)
+            if score.get("score_bull", 0) >= threshold:
+                return "score_bull"
+        return None
+
+    tp_long = tp if tp is not None else 999999
     if current_price <= sl:
         return "sl"
-    if current_price >= tp:
+    if current_price >= tp_long:
         return "tp"
     if trail_dir == -1:
         return "trail_flip"
@@ -158,8 +190,21 @@ def check_exit_conditions(current_price: float, position: dict,
 
 def update_stop_loss(position: dict, new_sl: float) -> dict:
     """Actualiza el stop loss si el trail se movió a favor."""
+    side = trade_side(position)
     current_sl = position.get("stop_loss", 0)
-    if new_sl > current_sl:
+    if side == "short":
+        if new_sl < current_sl:
+            position["stop_loss"] = new_sl
+            logger.info(f"📉 Trail SL short actualizado: {current_sl:.2f} → {new_sl:.2f}")
+    elif new_sl > current_sl:
         position["stop_loss"] = new_sl
         logger.info(f"📈 Trail SL actualizado: {current_sl:.2f} → {new_sl:.2f}")
     return position
+
+
+def compute_trailing_stop(trail_level: float, atr_val: float,
+                          side: str = "long") -> float:
+    buffer = atr_val * 0.2
+    if side == "short":
+        return trail_level + buffer
+    return trail_level - buffer

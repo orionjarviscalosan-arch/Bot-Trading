@@ -461,6 +461,8 @@ def compute_all(df_4h: pd.DataFrame, df_1d: pd.DataFrame,
 
     long_sl  = trail_level - atr_val * sl_buffer
     long_tp  = current_price + (current_price - long_sl) * p["rr_ratio"]
+    short_sl = trail_level + atr_val * sl_buffer
+    short_tp = current_price - (short_sl - current_price) * p["rr_ratio"]
 
     return {
         "timestamp":     df_4h.index[-1],
@@ -470,6 +472,8 @@ def compute_all(df_4h: pd.DataFrame, df_1d: pd.DataFrame,
         "trail_dir":     int(tdir.iloc[-1]),
         "long_sl":       round(long_sl, 2),
         "long_tp":       round(long_tp, 2),
+        "short_sl":      round(short_sl, 2),
+        "short_tp":      round(short_tp, 2),
         "score":         score,
         "df":            df_4h,
     }
@@ -479,24 +483,39 @@ def compute_all(df_4h: pd.DataFrame, df_1d: pd.DataFrame,
 # DECISIÓN DE SEÑAL
 # ══════════════════════════════════════════════════════════
 
-def get_signal(state: dict, params: dict, last_long_bar: int,
-               current_bar: int, has_position: bool) -> str:
+def get_signal(state: dict, params: dict,
+               last_long_bar: int | None,
+               last_short_bar: int | None,
+               current_bar: int,
+               open_trade: dict | None = None) -> str:
     """
-    Evalúa el estado actual y devuelve: 'long' | 'close' | 'none'
-    Todas las condiciones son idénticas al Pine Script Entry Trigger v7.
+    Evalúa el estado actual y devuelve: 'long' | 'short' | 'close' | 'none'
+    Entradas long/short son espejo del Pine Entry Trigger v7.
     """
     sc       = state["score"]
     p        = params
     threshold = p["score_threshold"]
     cd_bars   = p["cooldown_bars"]
     bull_margin = p.get("score_bull_margin", 10)
+    bear_margin = p.get("score_bear_margin", bull_margin)
     momentum_min = p.get("momentum_min", -0.5)
+    momentum_max = p.get(
+        "momentum_max",
+        -0.01 if momentum_min >= 0 else -momentum_min,
+    )
 
     bull = sc["score_bull"]
     bear = sc["score_bear"]
 
-    cooldown_ok = (last_long_bar is None or
-                   current_bar - last_long_bar > cd_bars)
+    has_position = open_trade is not None
+    position_side = (open_trade or {}).get("side", "long")
+
+    long_cooldown_ok = (
+        last_long_bar is None or current_bar - last_long_bar > cd_bars
+    )
+    short_cooldown_ok = (
+        last_short_bar is None or current_bar - last_short_bar > cd_bars
+    )
 
     # Señal de ENTRADA LONG
     long_signal = (
@@ -509,20 +528,43 @@ def get_signal(state: dict, params: dict, last_long_bar: int,
         and sc["momentum_raw"] > momentum_min
         and sc["regime_ok"]
         and sc["trail_dir"] == 1
-        and cooldown_ok
+        and long_cooldown_ok
         and not has_position
     )
 
-    # Señal de CIERRE (salida del long)
-    close_signal = (
-        has_position and (
-            sc["trail_dir"] == -1          # trail flip bajista
-            or bear >= threshold           # sesgo bajista fuerte
-        )
+    # Señal de ENTRADA SHORT (espejo bajista)
+    short_signal = (
+        bear >= threshold
+        and bear > bull + bear_margin
+        and sc["htf_bear"]
+        and sc["struct_bias"] == -1
+        and (sc["bear_choch_recent"] or
+             (sc["bear_bos_recent"] and sc["bear_zone_near"]))
+        and sc["momentum_raw"] < momentum_max
+        and sc["regime_ok"]
+        and sc["trail_dir"] == -1
+        and short_cooldown_ok
+        and not has_position
     )
+
+    # Señal de CIERRE según lado de la posición
+    close_signal = False
+    if has_position:
+        if position_side == "short":
+            close_signal = (
+                sc["trail_dir"] == 1
+                or bull >= threshold
+            )
+        else:
+            close_signal = (
+                sc["trail_dir"] == -1
+                or bear >= threshold
+            )
 
     if long_signal:
         return "long"
+    if short_signal:
+        return "short"
     if close_signal:
         return "close"
     return "none"
