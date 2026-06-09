@@ -218,6 +218,7 @@ def maybe_promote_candidate():
     if (candidate_calmar > active_calmar * 1.1 and
             candidate_pf >= active_pf):
         save_param_set(candidate, source="optimized", metrics=candidate_metrics)
+        set_state("params_style", get_state("active_trading_style") or get_state("trading_style"))
         set_state("candidate_params",  None)
         set_state("candidate_metrics", None)
         set_state("candidate_since",   None)

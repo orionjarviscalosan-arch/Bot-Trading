@@ -246,6 +246,14 @@ def get_active_params():
         return json.loads(row["params"])
     return None
 
+
+def get_active_param_source() -> str | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT source FROM param_sets WHERE active = TRUE ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    return row["source"] if row else None
+
 def get_active_param_metrics() -> dict:
     """Métricas almacenadas del set de parámetros activo."""
     with get_conn() as conn:

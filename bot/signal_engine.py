@@ -386,10 +386,9 @@ def compute_all(df_4h: pd.DataFrame, df_1d: pd.DataFrame,
     df_1d: DataFrame 1D con OHLCV
     params: parámetros activos del SIGNAL_PARAMS
     """
+    p = params
     if len(df_4h) < p.get("min_ltf_bars", 200) or len(df_1d) < p.get("min_htf_bars", 50):
         raise ValueError("Datos insuficientes para calcular indicadores")
-
-    p = params
 
     # ── Indicadores 4H ────────────────────────────────────
     atr_4h        = calc_atr(df_4h, p["atr_len"])
@@ -521,7 +520,7 @@ def get_signal(state: dict, params: dict,
     long_signal = (
         bull >= threshold
         and bull > bear + bull_margin
-        and sc["htf_bull"]
+        and (sc["htf_bull"] or sc.get("p1_bull", 0) >= p.get("htf_min_score", 12))
         and sc["struct_bias"] == 1
         and (sc["bull_choch_recent"] or
              (sc["bull_bos_recent"] and sc["bull_zone_near"]))
@@ -536,7 +535,7 @@ def get_signal(state: dict, params: dict,
     short_signal = (
         bear >= threshold
         and bear > bull + bear_margin
-        and sc["htf_bear"]
+        and (sc["htf_bear"] or sc.get("p1_bear", 0) >= p.get("htf_min_score", 12))
         and sc["struct_bias"] == -1
         and (sc["bear_choch_recent"] or
              (sc["bear_bos_recent"] and sc["bear_zone_near"]))

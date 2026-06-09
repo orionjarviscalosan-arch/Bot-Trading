@@ -5,7 +5,14 @@ Para activar la **Charting Library** completa (herramientas de dibujo, más time
 
 ## 1. Obtener licencia
 
-Solicita acceso en: https://www.tradingview.com/HTML5-stock-chart-library/
+Solicita acceso en (página oficial actual):
+
+- https://www.tradingview.com/free-charting-libraries/
+- https://www.tradingview.com/advanced-charts/ (Advanced Charts → «Get the library»)
+
+Documentación (acceso tras aprobación): https://www.tradingview.com/charting-library-docs/
+
+> **Nota:** La URL antigua `HTML5-stock-chart-library/` ya no existe (404).
 
 TradingView te enviará un ZIP con la carpeta `charting_library/`.
 

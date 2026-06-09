@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import os
 
 import config as cfg
-from bot.database import get_state, set_state, save_param_set, get_active_params
+from bot.database import get_state, set_state, save_param_set, get_active_params, get_active_param_source
 from bot.trading_styles import (
     normalize_style, get_style_config, apply_style_to_signal_params,
     STYLE_LABELS, VALID_STYLES, list_styles_summary,
@@ -106,10 +106,32 @@ def _reset_bar_counters() -> None:
 
 def sync_params(rt: RuntimeConfig) -> None:
     stored = get_state("active_trading_style")
+    params_style = get_state("params_style")
     params = get_active_params()
-    if stored != rt.style or params is None:
+    source = get_active_param_source()
+
+    style_changed = stored != rt.style or params_style != rt.style
+    missing = params is None
+    unmigrated = params_style is None and params is not None
+    stale = (
+        source == "optimized"
+        and params_style is not None
+        and params_style != rt.style
+    )
+    drifted = (
+        source
+        and source.startswith("style_")
+        and params is not None
+        and params.get("score_threshold") != rt.signal_params.get("score_threshold")
+    )
+
+    if style_changed or missing or unmigrated or stale or drifted:
         save_param_set(rt.signal_params.copy(), source=f"style_{rt.style}")
         set_state("active_trading_style", rt.style)
+        set_state("params_style", rt.style)
+        logger.info(
+            f"Parámetros sincronizados con estilo {rt.style} "
+            f"(source={source}, params_style={params_style})")
 
 
 def _reschedule_jobs(rt: RuntimeConfig) -> None:
