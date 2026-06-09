@@ -30,6 +30,14 @@ MAX_BACKTEST_BARS = 80_000
 WARMUP_EXTRA_BARS = 400
 
 
+def _as_utc_timestamp(value) -> pd.Timestamp:
+    """Normaliza datetime/str/Timestamp a UTC sin duplicar tzinfo."""
+    ts = pd.Timestamp(value)
+    if ts.tz is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
+
 def _slice_htf(df_htf: pd.DataFrame, ts) -> pd.DataFrame:
     return df_htf[df_htf.index <= ts]
 
@@ -318,8 +326,8 @@ def run_backtest(
     elif isinstance(end_date, str):
         end_date = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
 
-    since = pd.Timestamp(start_date, tz="UTC")
-    until = pd.Timestamp(end_date, tz="UTC")
+    since = _as_utc_timestamp(start_date)
+    until = _as_utc_timestamp(end_date)
     if since >= until:
         raise ValueError("start_date debe ser anterior a end_date")
 

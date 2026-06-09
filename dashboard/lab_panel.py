@@ -261,8 +261,8 @@ def render_backtest_tab():
     with c8:
         run_save = st.checkbox("Guardar en SQLite", value=True)
 
-    since_ts = pd.Timestamp(datetime.combine(start_d, datetime.min.time()), tz="UTC")
-    until_ts = pd.Timestamp(datetime.combine(end_d, datetime.max.time()), tz="UTC")
+    since_ts = pd.Timestamp(datetime.combine(start_d, datetime.min.time())).tz_localize("UTC")
+    until_ts = pd.Timestamp(datetime.combine(end_d, datetime.max.time())).tz_localize("UTC")
     est = estimate_bars_between(since_ts, until_ts, timeframe)
     if est > MAX_BACKTEST_BARS:
         st.warning(
@@ -280,8 +280,8 @@ def render_backtest_tab():
                     timeframe=timeframe,
                     htf=htf,
                     params=params,
-                    start_date=since_ts.to_pydatetime(),
-                    end_date=until_ts.to_pydatetime(),
+                    start_date=since_ts.isoformat(),
+                    end_date=until_ts.isoformat(),
                     strategy_type=strategy_type,
                     capital=float(capital),
                 )
