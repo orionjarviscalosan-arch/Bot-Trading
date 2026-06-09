@@ -32,6 +32,12 @@ def _build_params_from_ui(style: str, strategy_type: str, hmm_extra: dict) -> di
     return params
 
 
+def _safe_style_index(style_key: str) -> int:
+    keys = list(TRADING_STYLES.keys())
+    normalized = style_key if style_key in keys else cfg.TRADING_STYLE
+    return keys.index(normalized) if normalized in keys else 0
+
+
 def render_strategies_tab():
     st.subheader("Mis estrategias (SQLite)")
     st.caption("Guarda configuraciones con nombre propio para reutilizar en backtests.")
@@ -41,40 +47,47 @@ def render_strategies_tab():
     with st.expander("Crear / editar estrategia", expanded=not strategies):
         edit_id = st.session_state.get("lab_edit_strategy_id")
         edit_row = get_strategy(strategy_id=edit_id) if edit_id else None
+        if edit_id and edit_row is None:
+            st.session_state.pop("lab_edit_strategy_id", None)
+            edit_id = None
+
+        def _ev(key: str, default=""):
+            if not edit_row:
+                return default
+            val = edit_row.get(key)
+            return default if val is None else val
 
         c1, c2 = st.columns(2)
         with c1:
             name = st.text_input(
                 "Nombre",
-                value=edit_row["name"] if edit_row else "",
+                value=_ev("name"),
                 placeholder="BTC HMM 4h 2018-2026",
             )
             strategy_type = st.selectbox(
                 "Tipo de estrategia",
                 list(STRATEGY_TYPES.keys()),
                 index=list(STRATEGY_TYPES.keys()).index(
-                    edit_row["strategy_type"] if edit_row else "confluence"
+                    _ev("strategy_type", "confluence")
                 ),
                 format_func=lambda k: STRATEGY_TYPES[k]["label"],
             )
             style = st.selectbox(
                 "Preset base (estilo)",
                 list(TRADING_STYLES.keys()),
-                index=list(TRADING_STYLES.keys()).index(
-                    edit_row.get("trading_style") or cfg.TRADING_STYLE
-                ),
+                index=_safe_style_index(_ev("trading_style", cfg.TRADING_STYLE)),
                 format_func=lambda k: STYLE_LABELS.get(k, k),
             )
         with c2:
             symbol = st.text_input(
                 "Par por defecto",
-                value=edit_row.get("symbol") or "BTC/USDT",
+                value=_ev("symbol", "BTC/USDT"),
             )
             scfg = get_style_config(style)
             tf_opts = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
             htf_opts = ["5m", "15m", "30m", "1h", "4h", "1d"]
-            tf_default = edit_row.get("timeframe") or scfg["timeframe"]
-            htf_default = edit_row.get("htf") or scfg["htf"]
+            tf_default = _ev("timeframe", scfg["timeframe"])
+            htf_default = _ev("htf", scfg["htf"])
             timeframe = st.selectbox(
                 "Timeframe",
                 tf_opts,
@@ -87,7 +100,7 @@ def render_strategies_tab():
             )
             notes = st.text_area(
                 "Notas",
-                value=edit_row.get("notes") or "",
+                value=_ev("notes"),
                 height=68,
             )
 
