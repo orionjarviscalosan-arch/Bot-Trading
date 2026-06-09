@@ -11,8 +11,19 @@ from pathlib import Path
 import streamlit.components.v1 as components
 
 _STATIC = Path(__file__).parent / "static"
-_CHART_JS = (_STATIC / "tv_chart.js").read_text(encoding="utf-8")
 _LW_CDN = "https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"
+
+
+def _load_chart_js(filename: str) -> str:
+    return (_STATIC / filename).read_text(encoding="utf-8")
+
+
+def _sanitize_payload_json(payload: dict) -> str:
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    return payload_json.replace("</", "<\\/")
+
+
+_CHART_JS = _load_chart_js("tv_chart.js")
 
 
 def _charting_library_config() -> tuple[bool, str]:
@@ -56,8 +67,7 @@ def render_tradingview_chart(payload: dict, height: int = 640) -> str:
     payload["useChartingLibrary"] = use_cl
     payload["libraryPath"] = lib_path
 
-    payload_json = json.dumps(payload, ensure_ascii=False)
-    payload_json = payload_json.replace("</", "<\\/")
+    payload_json = _sanitize_payload_json(payload)
 
     cl_script = ""
     if use_cl and lib_path:

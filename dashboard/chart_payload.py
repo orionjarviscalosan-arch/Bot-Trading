@@ -20,6 +20,45 @@ TIMEFRAME_TO_TV_RESOLUTION = {
     "12h": "720", "1d": "1D",
 }
 
+# Periodos KLineChart Pro (multiplier + timespan)
+TIMEFRAME_TO_KLINE_PERIOD: dict[str, dict] = {
+    "1m":  {"multiplier": 1,  "timespan": "minute", "text": "1m"},
+    "3m":  {"multiplier": 3,  "timespan": "minute", "text": "3m"},
+    "5m":  {"multiplier": 5,  "timespan": "minute", "text": "5m"},
+    "15m": {"multiplier": 15, "timespan": "minute", "text": "15m"},
+    "30m": {"multiplier": 30, "timespan": "minute", "text": "30m"},
+    "1h":  {"multiplier": 1,  "timespan": "hour",   "text": "1H"},
+    "2h":  {"multiplier": 2,  "timespan": "hour",   "text": "2H"},
+    "4h":  {"multiplier": 4,  "timespan": "hour",   "text": "4H"},
+    "6h":  {"multiplier": 6,  "timespan": "hour",   "text": "6H"},
+    "8h":  {"multiplier": 8,  "timespan": "hour",   "text": "8H"},
+    "12h": {"multiplier": 12, "timespan": "hour",   "text": "12H"},
+    "1d":  {"multiplier": 1,  "timespan": "day",    "text": "1D"},
+}
+
+KLINE_PERIODS: list[dict] = [
+    {"multiplier": 1,  "timespan": "minute", "text": "1m"},
+    {"multiplier": 5,  "timespan": "minute", "text": "5m"},
+    {"multiplier": 15, "timespan": "minute", "text": "15m"},
+    {"multiplier": 1,  "timespan": "hour",   "text": "1H"},
+    {"multiplier": 4,  "timespan": "hour",   "text": "4H"},
+    {"multiplier": 1,  "timespan": "day",    "text": "1D"},
+]
+
+
+def build_symbol_info(symbol: str) -> dict:
+    base = symbol.split("/")[0]
+    quote = symbol.split("/")[1] if "/" in symbol else "USDT"
+    return {
+        "ticker": symbol_to_binance(symbol),
+        "shortName": base,
+        "name": symbol,
+        "exchange": "BINANCE",
+        "market": "crypto",
+        "priceCurrency": quote.lower(),
+        "type": "crypto",
+    }
+
 
 def symbol_to_binance(symbol: str) -> str:
     return symbol.replace("/", "").upper()
@@ -67,8 +106,9 @@ def build_chart_payload(
     timeframe: str,
     signals: pd.DataFrame | None = None,
     show_unacted_signals: bool = False,
+    pairs: list[str] | None = None,
 ) -> dict:
-    """Payload JSON para Lightweight Charts o Charting Library."""
+    """Payload JSON para Lightweight Charts, KLineChart Pro o Charting Library."""
     markers: list[dict] = []
     shapes: list[dict] = []
     price_lines: list[dict] = []
@@ -186,14 +226,27 @@ def build_chart_payload(
     binance_sym = symbol_to_binance(symbol)
     interval = TIMEFRAME_TO_BINANCE.get(timeframe, timeframe)
     resolution = TIMEFRAME_TO_TV_RESOLUTION.get(timeframe, "60")
+    period = TIMEFRAME_TO_KLINE_PERIOD.get(
+        timeframe, {"multiplier": 5, "timespan": "minute", "text": timeframe})
+    bars = ohlcv_to_bars(ohlcv)
+    time_from_ms = bars[0]["time"] * 1000 if bars else None
+    time_to_ms = bars[-1]["time"] * 1000 if bars else None
+
+    for pl in price_lines:
+        pl["timeFrom"] = time_from_ms
+        pl["timeTo"] = time_to_ms
 
     return {
         "symbol": symbol,
         "binanceSymbol": binance_sym,
+        "symbolInfo": build_symbol_info(symbol),
         "timeframe": timeframe,
         "interval": interval,
         "resolution": resolution,
-        "bars": ohlcv_to_bars(ohlcv),
+        "period": period,
+        "periods": KLINE_PERIODS,
+        "pairs": pairs or [symbol],
+        "bars": bars,
         "markers": markers,
         "shapes": shapes,
         "priceLines": price_lines,

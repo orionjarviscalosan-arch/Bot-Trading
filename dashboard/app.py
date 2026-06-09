@@ -25,9 +25,9 @@ from bot.dashboard_data import (
     get_signals_df, get_metrics, get_bot_status, build_equity_curve,
     enrich_open_trades, get_db_summary,
 )
-from dashboard.charts import get_chart_ohlcv, CHART_CANDLE_LIMIT
 from dashboard.chart_payload import build_chart_payload
-from dashboard.tv_component import render_tradingview_chart, charting_library_status
+from dashboard.chart_renderer import render_chart, CHART_ENGINES
+from dashboard.charts import get_chart_ohlcv, CHART_CANDLE_LIMIT
 
 st.set_page_config(
     page_title="Nextwaves Bot Dashboard",
@@ -337,8 +337,13 @@ def main():
         with col_save:
             if st.button("Guardar prefs", use_container_width=True):
                 save_prefs({
+                    **prefs,
                     "auto_refresh": auto_refresh,
                     "days": days,
+                    "chart_engine": st.session_state.get(
+                        "nw_chart_engine_select",
+                        prefs.get("chart_engine", "kline"),
+                    ),
                 })
                 st.success("Guardado en este dispositivo")
         with col_refresh:
@@ -353,7 +358,7 @@ def main():
             st.caption("Auto-refresh activo — recarga cada 60 s")
 
         if auto_refresh != prefs.get("auto_refresh") or days != prefs.get("days"):
-            save_prefs({"auto_refresh": auto_refresh, "days": days})
+            save_prefs({**prefs, "auto_refresh": auto_refresh, "days": days})
 
         if os.getenv("DASHBOARD_PASSWORD"):
             if st.button("Cerrar sesión"):
@@ -464,7 +469,7 @@ def main():
         if st.session_state["nw_chart_symbol"] not in chart_pairs:
             st.session_state["nw_chart_symbol"] = default_chart_pair
 
-        c_sym, c_sig, c_unacted = st.columns([2, 1, 1])
+        c_sym, c_engine, c_sig, c_unacted = st.columns([2, 1, 1, 1])
         with c_sym:
             chart_symbol = st.selectbox(
                 "Par del gráfico",
@@ -473,6 +478,18 @@ def main():
                 key="nw_chart_symbol_select",
             )
             st.session_state["nw_chart_symbol"] = chart_symbol
+        with c_engine:
+            engine_options = list(CHART_ENGINES.keys())
+            default_engine = prefs.get("chart_engine", "kline")
+            if default_engine not in engine_options:
+                default_engine = "kline"
+            chart_engine = st.selectbox(
+                "Motor gráfico",
+                engine_options,
+                index=_safe_index(engine_options, default_engine),
+                format_func=lambda k: CHART_ENGINES[k],
+                key="nw_chart_engine_select",
+            )
         with c_sig:
             show_signal_markers = st.checkbox(
                 "Marcar señales actuadas", value=True, key="nw_chart_signals"
@@ -502,44 +519,28 @@ def main():
                 timeframe=chart_tf,
                 signals=chart_signals,
                 show_unacted_signals=show_unacted,
+                pairs=list(cfg.TRADING_PAIRS),
             )
-            engine = render_tradingview_chart(payload, height=680)
+            engine_used = render_chart(payload, engine=chart_engine, height=680)
             n_closed = len(all_trades[all_trades["exit_time"].notna()]) if not all_trades.empty else 0
             n_open = len(chart_open)
             n_marks = len(payload.get("markers", []))
-            cl_status = charting_library_status()
+            engine_label = CHART_ENGINES.get(chart_engine, chart_engine)
 
-            if engine == "charting_library":
+            if engine_used == "kline":
                 st.caption(
-                    f"**TradingView Charting Library** · **{chart_symbol}** · **{chart_tf}** · "
-                    f"{len(payload.get('bars', []))} velas · {n_marks} marcas · "
-                    f"modo **{mode}** · {n_closed} cierre(s) · {n_open} abierta(s)."
+                    f"**{engine_label}** · **{chart_symbol}** · **{chart_tf}** · "
+                    f"{n_marks} marcas · modo **{mode}** · "
+                    f"{n_closed} cierre(s) · {n_open} abierta(s). "
+                    "Indicadores · barra de dibujo · datos Binance en vivo."
                 )
             else:
                 st.caption(
-                    f"**TradingView Lightweight Charts** · **{chart_symbol}** · **{chart_tf}** · "
+                    f"**{engine_label}** · **{chart_symbol}** · **{chart_tf}** · "
                     f"{len(payload.get('bars', []))} velas · {n_marks} marcas · "
                     f"modo **{mode}** · {n_closed} cierre(s) · {n_open} abierta(s). "
                     "Zoom con rueda · arrastrar para desplazar."
                 )
-                if not cl_status["active"]:
-                    with st.expander("Activar Charting Library completa (opcional)"):
-                        if not cl_status["files_installed"]:
-                            st.markdown(
-                                "1. Solicita la librería en "
-                                "[TradingView Charting Library](https://www.tradingview.com/HTML5-stock-chart-library/)\n"
-                                "2. Copia la carpeta `charting_library/` a "
-                                "`dashboard/static/charting_library/` en el VPS\n"
-                                "3. Añade `DASHBOARD_PUBLIC_URL=https://tu-dominio` al `.env`\n"
-                                "4. Reinicia el dashboard"
-                            )
-                        elif not cl_status["public_url_set"]:
-                            st.warning(
-                                "Archivos detectados, pero falta `DASHBOARD_PUBLIC_URL` en `.env` "
-                                "para cargar la Charting Library en el iframe."
-                            )
-                        else:
-                            st.info("Revisa `dashboard/charting_library/README.md`")
         except Exception as exc:
             st.error(f"No se pudo cargar el gráfico de {chart_symbol}: {exc}")
             st.caption(
