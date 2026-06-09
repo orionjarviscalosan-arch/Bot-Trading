@@ -124,6 +124,9 @@ def get_db_summary(mode: str = "shadow") -> dict:
         "last_signal_time": last_signal,
         "by_style": {row[0]: row[1] for row in styles},
     }
+
+
+def get_bot_status() -> dict:
     """Estado del bot leyendo SQLite (sin depender del proceso del bot)."""
     import config as cfg
     from bot.database import count_open_trades
