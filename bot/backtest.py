@@ -38,6 +38,12 @@ def _as_utc_timestamp(value) -> pd.Timestamp:
     return ts.tz_convert("UTC")
 
 
+def _iso_ts(ts) -> str:
+    if hasattr(ts, "isoformat"):
+        return ts.isoformat()
+    return str(ts)
+
+
 def _slice_htf(df_htf: pd.DataFrame, ts) -> pd.DataFrame:
     return df_htf[df_htf.index <= ts]
 
@@ -220,8 +226,8 @@ def run_simulation(
                 pnl, pnl_pct = calc_trade_pnl(pos["entry"], price, pos["qty"], pos["side"])
                 cumulative += pnl
                 trades.append({
-                    "entry_time": pos["entry_time"],
-                    "exit_time": ts,
+                    "entry_time": _iso_ts(pos["entry_time"]),
+                    "exit_time": _iso_ts(ts),
                     "side": pos["side"],
                     "entry_price": pos["entry"],
                     "exit_price": price,
@@ -271,8 +277,8 @@ def run_simulation(
         pnl, pnl_pct = calc_trade_pnl(pos["entry"], last_price, pos["qty"], pos["side"])
         cumulative += pnl
         trades.append({
-            "entry_time": pos["entry_time"],
-            "exit_time": last_ts,
+            "entry_time": _iso_ts(pos["entry_time"]),
+            "exit_time": _iso_ts(last_ts),
             "side": pos["side"],
             "entry_price": pos["entry"],
             "exit_price": last_price,

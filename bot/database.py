@@ -10,6 +10,31 @@ from config import DB_PATH
 
 logger = logging.getLogger(__name__)
 
+
+def _json_safe(obj):
+    """Convierte Timestamp/datetime/numpy a tipos serializables en JSON."""
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if hasattr(obj, "isoformat") and type(obj).__name__ in ("Timestamp", "datetime"):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if hasattr(obj, "item"):
+        try:
+            return obj.item()
+        except Exception:
+            pass
+    return str(obj)
+
+
+def _json_dumps(data) -> str:
+    return json.dumps(_json_safe(data))
+
+
 def get_conn():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
@@ -441,7 +466,7 @@ def save_backtest_run(strategy_name: str, symbol: str, start_date: str,
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (strategy_id, strategy_name, symbol, timeframe, htf, strategy_type,
               start_date, end_date, capital,
-              json.dumps(metrics), json.dumps(trades), json.dumps(equity_curve)))
+              _json_dumps(metrics), _json_dumps(trades), _json_dumps(equity_curve)))
         return cur.lastrowid
 
 
