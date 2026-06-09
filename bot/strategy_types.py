@@ -22,6 +22,20 @@ STRATEGY_TYPES: dict[str, dict] = {
         "use_hmm_regime": True,
         "hmm_pure": True,
     },
+    "nextwave_v2": {
+        "label": "NextWave Suite v2 (Pine)",
+        "description": "Réplica Entry Trigger v7 + Confluence + Trend Trail.",
+        "use_hmm_regime": False,
+        "hmm_pure": False,
+        "nextwave_v2": True,
+    },
+    "nextwave_v2_hmm": {
+        "label": "NextWave Suite v2 + HMM",
+        "description": "NextWave v2 filtrado por régimen HMM para reducir drawdown.",
+        "use_hmm_regime": True,
+        "hmm_pure": False,
+        "nextwave_v2": True,
+    },
 }
 
 
@@ -34,4 +48,6 @@ def apply_strategy_type_params(params: dict, strategy_type: str) -> dict:
     out = params.copy()
     out["use_hmm_regime"] = cfg.get("use_hmm_regime", False)
     out["strategy_type"] = strategy_type
+    if cfg.get("nextwave_v2"):
+        out["nextwave_v2"] = True
     return out

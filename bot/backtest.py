@@ -17,6 +17,8 @@ from bot.signal_engine import (
     calc_structure, calc_fvg, calc_trail, ema,
 )
 from bot.order_manager import check_exit_conditions, calc_trade_pnl, compute_trailing_stop
+from bot.backtest_costs import calc_trade_costs, calc_risk_position_size
+from bot.nextwave_v2 import get_nextwave_signal, compute_nextwave_stops
 from bot.regime_hmm import (
     compute_regime_series, get_hmm_pure_signal,
     hmm_allows_long, hmm_allows_short, merge_hmm_params,
@@ -74,6 +76,7 @@ def _precompute_ltf_frame(df_ltf: pd.DataFrame, params: dict) -> pd.DataFrame:
         p["use_adaptive"], p["adaptive_lb"],
     )
     cw = p.get("cooldown_bars", 4)
+    cross_w = p.get("cross_window_bars", cw)
     bull_cross = (wt1 > wt2) & (wt1.shift(1) <= wt2.shift(1))
     bear_cross = (wt1 < wt2) & (wt1.shift(1) >= wt2.shift(1))
     price_range = df["high"].rolling(20).max() - df["low"].rolling(20).min()
@@ -87,8 +90,8 @@ def _precompute_ltf_frame(df_ltf: pd.DataFrame, params: dict) -> pd.DataFrame:
     df["atr_ratio"] = atr_ratio
     df["trail_level"] = trail
     df["trail_dir"] = tdir
-    df["bull_cross_recent"] = bull_cross.rolling(cw).max().astype(bool)
-    df["bear_cross_recent"] = bear_cross.rolling(cw).max().astype(bool)
+    df["bull_cross_recent"] = bull_cross.rolling(cross_w).max().astype(bool)
+    df["bear_cross_recent"] = bear_cross.rolling(cross_w).max().astype(bool)
     for col in struct.columns:
         df[col] = struct[col]
     for col in fvg.columns:
@@ -115,19 +118,25 @@ def _state_at_index(
     price = float(row["close"])
     trail_level = float(row["trail_level"])
     atr_val = float(row["atr"])
-    sl_buffer = params.get("sl_buffer", 0.2)
+    trail_dir = int(row["trail_dir"])
     rr = params["rr_ratio"]
-    long_sl = trail_level - atr_val * sl_buffer
-    long_tp = price + (price - long_sl) * rr
-    short_sl = trail_level + atr_val * sl_buffer
-    short_tp = price - (short_sl - price) * rr
+
+    if params.get("nextwave_v2"):
+        long_sl, long_tp, short_sl, short_tp = compute_nextwave_stops(
+            df_ltf, i, params, price, atr_val, trail_level, trail_dir)
+    else:
+        sl_buffer = params.get("sl_buffer", 0.2)
+        long_sl = trail_level - atr_val * sl_buffer
+        long_tp = price + (price - long_sl) * rr
+        short_sl = trail_level + atr_val * sl_buffer
+        short_tp = price - (short_sl - price) * rr
 
     return {
         "timestamp": ts,
         "price": price,
         "atr": atr_val,
         "trail_level": trail_level,
-        "trail_dir": int(row["trail_dir"]),
+        "trail_dir": trail_dir,
         "long_sl": round(long_sl, 2),
         "long_tp": round(long_tp, 2),
         "short_sl": round(short_sl, 2),
@@ -163,7 +172,8 @@ def run_simulation(
     warmup = max(int(params.get("min_ltf_bars", 200)), 300)
     start = start_idx if start_idx is not None else warmup
     end = end_idx if end_idx is not None else len(df_ltf)
-    position_pct = params.get("position_size_pct", POSITION_SIZE_PCT)
+    use_risk_sizing = params.get("risk_pct") is not None
+    initial_equity = float(params.get("initial_capital", capital))
 
     if regime_series is None and params.get("use_hmm_regime"):
         regime_series = compute_regime_series(df_ltf, params)
@@ -177,7 +187,9 @@ def run_simulation(
     last_long = None
     last_short = None
     bar_i = 0
-    cumulative = 0.0
+    equity = initial_equity
+    total_commission = 0.0
+    is_nextwave = cfg.get("nextwave_v2") or params.get("nextwave_v2")
     prev_regime = None
 
     for i in range(start, end):
@@ -210,6 +222,11 @@ def run_simulation(
                 pos is not None,
                 pos["side"] if pos else None,
             )
+        elif is_nextwave:
+            signal = get_nextwave_signal(
+                state, params, last_long, last_short, bar_i, open_trade)
+            if params.get("use_hmm_regime"):
+                signal = _apply_hmm_filter(signal, regime, params)
         else:
             signal = get_signal(state, params, last_long, last_short, bar_i, open_trade)
             if params.get("use_hmm_regime"):
@@ -223,20 +240,28 @@ def run_simulation(
 
             if exit_reason or signal == "close":
                 reason = exit_reason or "regime_flip"
-                pnl, pnl_pct = calc_trade_pnl(pos["entry"], price, pos["qty"], pos["side"])
-                cumulative += pnl
+                gross_pnl, pnl_pct = calc_trade_pnl(
+                    pos["entry"], price, pos["qty"], pos["side"])
+                comm, slip = calc_trade_costs(pos["entry"], price, pos["qty"], params)
+                net_pnl = gross_pnl - comm - slip
+                total_commission += comm
+                equity += net_pnl
                 trades.append({
                     "entry_time": _iso_ts(pos["entry_time"]),
                     "exit_time": _iso_ts(ts),
                     "side": pos["side"],
                     "entry_price": pos["entry"],
                     "exit_price": price,
-                    "pnl_usdt": round(pnl, 2),
+                    "pnl_usdt": round(net_pnl, 2),
                     "pnl_pct": round(pnl_pct, 4),
+                    "commission": round(comm, 2),
                     "exit_reason": reason,
                     "hmm_regime": regime,
                 })
-                equity_curve.append({"time": ts.isoformat(), "equity": round(cumulative, 2)})
+                equity_curve.append({
+                    "time": _iso_ts(ts),
+                    "equity": round(equity - initial_equity, 2),
+                })
                 pos = None
             else:
                 new_sl = compute_trailing_stop(trail_lv, state["atr"], pos["side"])
@@ -246,25 +271,41 @@ def run_simulation(
                     pos["sl"] = new_sl
 
         if signal == "long" and pos is None:
-            qty = (capital * position_pct) / price
+            sl, tp = state["long_sl"], state["long_tp"]
+            if use_risk_sizing:
+                qty = calc_risk_position_size(equity, price, sl, params)
+            else:
+                pct = params.get("position_size_pct", POSITION_SIZE_PCT)
+                qty = (equity * pct) / price
+            if qty <= 0:
+                bar_i += 1
+                continue
             pos = {
                 "side": "long",
                 "entry": price,
                 "entry_time": ts,
-                "sl": state["long_sl"],
-                "tp": state["long_tp"],
+                "sl": sl,
+                "tp": tp if params.get("use_take_profit", True) else None,
                 "qty": qty,
             }
             last_long = bar_i
 
         elif signal == "short" and pos is None:
-            qty = (capital * position_pct) / price
+            sl, tp = state["short_sl"], state["short_tp"]
+            if use_risk_sizing:
+                qty = calc_risk_position_size(equity, price, sl, params)
+            else:
+                pct = params.get("position_size_pct", POSITION_SIZE_PCT)
+                qty = (equity * pct) / price
+            if qty <= 0:
+                bar_i += 1
+                continue
             pos = {
                 "side": "short",
                 "entry": price,
                 "entry_time": ts,
-                "sl": state["short_sl"],
-                "tp": state["short_tp"],
+                "sl": sl,
+                "tp": tp if params.get("use_take_profit", True) else None,
                 "qty": qty,
             }
             last_short = bar_i
@@ -274,27 +315,39 @@ def run_simulation(
     if pos:
         last_price = float(df_ltf["close"].iloc[end - 1])
         last_ts = df_ltf.index[end - 1]
-        pnl, pnl_pct = calc_trade_pnl(pos["entry"], last_price, pos["qty"], pos["side"])
-        cumulative += pnl
+        gross_pnl, pnl_pct = calc_trade_pnl(
+            pos["entry"], last_price, pos["qty"], pos["side"])
+        comm, slip = calc_trade_costs(pos["entry"], last_price, pos["qty"], params)
+        net_pnl = gross_pnl - comm - slip
+        total_commission += comm
+        equity += net_pnl
         trades.append({
             "entry_time": _iso_ts(pos["entry_time"]),
             "exit_time": _iso_ts(last_ts),
             "side": pos["side"],
             "entry_price": pos["entry"],
             "exit_price": last_price,
-            "pnl_usdt": round(pnl, 2),
+            "pnl_usdt": round(net_pnl, 2),
             "pnl_pct": round(pnl_pct, 4),
+            "commission": round(comm, 2),
             "exit_reason": "end_of_data",
             "hmm_regime": prev_regime or "range",
         })
         equity_curve.append({
-            "time": last_ts.isoformat(),
-            "equity": round(cumulative, 2),
+            "time": _iso_ts(last_ts),
+            "equity": round(equity - initial_equity, 2),
         })
 
     metrics = compute_metrics(trades)
     if metrics:
-        metrics["net_pnl"] = round(cumulative, 2)
+        net = round(equity - initial_equity, 2)
+        metrics["net_pnl"] = net
+        metrics["total_commission"] = round(total_commission, 2)
+        metrics["return_pct"] = round(net / initial_equity, 4) if initial_equity else 0
+        metrics["final_equity"] = round(equity, 2)
+        if metrics.get("max_drawdown", 0) > 0:
+            metrics["calmar_ratio"] = round(
+                (net / initial_equity) / metrics["max_drawdown"], 3)
 
     regime_dist = {}
     if regime_series is not None:
@@ -358,6 +411,7 @@ def run_backtest(
     start_idx = max(start_idx, max(int(params.get("min_ltf_bars", 200)), 300))
 
     params = apply_strategy_type_params(params, strategy_type)
+    capital = float(params.get("initial_capital", capital))
     regime_series = None
     if params.get("use_hmm_regime"):
         regime_series = compute_regime_series(df_ltf, params)

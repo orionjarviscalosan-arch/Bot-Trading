@@ -173,6 +173,7 @@ def render_strategies_tab():
             p = s["params"]
             st.caption(
                 f"Score ≥ {p.get('score_threshold', '—')} · "
+                f"Lev x{p.get('leverage', 1)} · "
                 f"HMM: {'sí' if p.get('use_hmm_regime') else 'no'}"
             )
         with col_c:
@@ -198,14 +199,15 @@ def render_backtest_tab():
     saved = get_strategy(name=saved_name) if saved_name != strat_options[0] else None
 
     pair_options = list(dict.fromkeys(list(cfg.TRADING_PAIRS) + ["BTC/USDT", "ETH/USDT"]))
+    default_symbol = (saved or {}).get("symbol") or pair_options[0]
+    sym_index = pair_options.index(default_symbol) if default_symbol in pair_options else 0
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        symbol = st.selectbox("Par", pair_options, index=0)
-        if saved and saved.get("symbol"):
-            symbol = saved["symbol"]
+        symbol = st.selectbox("Par", pair_options, index=sym_index)
     with c2:
-        start_d = st.date_input("Desde", value=date(2018, 1, 1))
+        default_start = date(2024, 1, 1)
+        start_d = st.date_input("Desde", value=default_start)
     with c3:
         end_d = st.date_input("Hasta", value=date.today())
 
@@ -214,8 +216,20 @@ def render_backtest_tab():
         strategy_type = saved["strategy_type"]
         timeframe = saved.get("timeframe") or get_style_config(style)["timeframe"]
         htf = saved.get("htf") or get_style_config(style)["htf"]
-        params = saved["params"]
-        st.info(f"Usando estrategia guardada: **{saved['name']}**")
+        params = dict(saved["params"])
+        p = params
+        st.info(
+            f"**{saved['name']}** · {timeframe}/{htf} · "
+            f"riesgo {p.get('risk_pct', '—')}% · leverage x{p.get('leverage', 1)} · "
+            f"comisión {float(p.get('commission_pct', 0))*100:.2f}%"
+        )
+        if p.get("nextwave_v2") or strategy_type.startswith("nextwave"):
+            lev = st.slider(
+                "Apalancamiento (x3–x5)",
+                3, 5,
+                int(min(max(p.get("leverage", 3), 3), 5)),
+            )
+            params["leverage"] = float(lev)
     else:
         c4, c5 = st.columns(2)
         with c4:
@@ -250,9 +264,12 @@ def render_backtest_tab():
             hmm_extra = {}
         params = _build_params_from_ui(style, strategy_type, hmm_extra)
 
+    cap_default = float((saved or {}).get("params", {}).get("initial_capital", 1000.0))
     c6, c7, c8 = st.columns(3)
     with c6:
-        capital = st.number_input("Capital (USDT)", 1000.0, 1_000_000.0, 10000.0, 1000.0)
+        capital = st.number_input("Capital inicial (USDT)", 100.0, 1_000_000.0, cap_default, 100.0)
+        if saved:
+            params["initial_capital"] = float(capital)
     with c7:
         save_name = st.text_input(
             "Nombre para guardar resultado",
@@ -308,8 +325,12 @@ def render_backtest_tab():
     m2.metric("Win Rate", f"{metrics.get('win_rate', 0):.1%}")
     m3.metric("Profit Factor", metrics.get("profit_factor", "—"))
     m4.metric("PnL neto", f"{metrics.get('net_pnl', 0):,.2f} USDT")
-    m5.metric("Max DD", f"{metrics.get('max_drawdown', 0):.1%}")
-    m6.metric("Calmar", metrics.get("calmar_ratio", "—"))
+    m5.metric("Retorno", f"{metrics.get('return_pct', 0):.1%}")
+    m6.metric("Comisiones", f"{metrics.get('total_commission', 0):,.2f} USDT")
+    c7, c8, c9 = st.columns(3)
+    c7.metric("Max DD", f"{metrics.get('max_drawdown', 0):.1%}")
+    c8.metric("Calmar", metrics.get("calmar_ratio", "—"))
+    c9.metric("Equity final", f"{metrics.get('final_equity', '—')} USDT")
 
     if result.get("regime_distribution"):
         st.caption(

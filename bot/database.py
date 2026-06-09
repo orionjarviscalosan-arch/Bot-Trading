@@ -157,6 +157,7 @@ def init_db():
         );
         """)
         _migrate_schema(conn)
+    seed_builtin_strategies()
     logger.info("Base de datos inicializada")
 
 def _migrate_schema(conn):
@@ -484,3 +485,25 @@ def list_backtest_runs(limit: int = 50) -> list[dict]:
         d["equity_curve"] = json.loads(d["equity_json"]) if d.get("equity_json") else []
         out.append(d)
     return out
+
+
+def seed_builtin_strategies() -> None:
+    """Inserta/actualiza estrategias predefinidas del laboratorio."""
+    from bot.strategy_presets import BUILTIN_STRATEGIES
+
+    for preset in BUILTIN_STRATEGIES:
+        existing = get_strategy(name=preset["name"])
+        try:
+            save_strategy(
+                name=preset["name"],
+                strategy_type=preset["strategy_type"],
+                params=preset["params"],
+                trading_style=preset.get("trading_style"),
+                symbol=preset.get("symbol"),
+                timeframe=preset.get("timeframe"),
+                htf=preset.get("htf"),
+                notes=preset.get("notes"),
+                strategy_id=existing["id"] if existing else None,
+            )
+        except Exception as e:
+            logger.warning(f"No se pudo sembrar estrategia {preset['name']}: {e}")
