@@ -61,7 +61,7 @@ def get_open_trades_df(mode: str = "shadow") -> pd.DataFrame:
     return df
 
 
-def get_signals_df(days: int = 30, limit: int = 200) -> pd.DataFrame:
+def get_signals_df(days: int = 30, limit: int = 500) -> pd.DataFrame:
     with get_conn() as conn:
         df = pd.read_sql_query(
             """
@@ -87,7 +87,43 @@ def get_metrics(mode: str = "shadow", days: int = 90,
     return compute_metrics(closed.to_dict("records"))
 
 
-def get_bot_status() -> dict:
+def get_db_summary(mode: str = "shadow") -> dict:
+    """Totales en SQLite sin filtros de estilo (diagnóstico dashboard)."""
+    with get_conn() as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE mode = ?", (mode,)
+        ).fetchone()[0]
+        closed = conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE mode = ? AND exit_time IS NOT NULL",
+            (mode,),
+        ).fetchone()[0]
+        open_count = conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE mode = ? AND exit_time IS NULL",
+            (mode,),
+        ).fetchone()[0]
+        last_trade = conn.execute(
+            "SELECT MAX(entry_time) FROM trades WHERE mode = ?", (mode,)
+        ).fetchone()[0]
+        last_signal = conn.execute(
+            "SELECT MAX(timestamp) FROM signals"
+        ).fetchone()[0]
+        styles = conn.execute(
+            """
+            SELECT COALESCE(trading_style, 'sin_estilo') AS st, COUNT(*) AS n
+            FROM trades WHERE mode = ?
+            GROUP BY trading_style
+            ORDER BY n DESC
+            """,
+            (mode,),
+        ).fetchall()
+    return {
+        "total_trades": int(total),
+        "closed_trades": int(closed),
+        "open_trades": int(open_count),
+        "last_trade_time": last_trade,
+        "last_signal_time": last_signal,
+        "by_style": {row[0]: row[1] for row in styles},
+    }
     """Estado del bot leyendo SQLite (sin depender del proceso del bot)."""
     import config as cfg
     from bot.database import count_open_trades

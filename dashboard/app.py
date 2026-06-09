@@ -23,7 +23,7 @@ from bot.trading_styles import TRADING_STYLES, STYLE_LABELS
 from bot.dashboard_data import (
     get_trades_df, get_closed_trades_df, get_open_trades_df,
     get_signals_df, get_metrics, get_bot_status, build_equity_curve,
-    enrich_open_trades,
+    enrich_open_trades, get_db_summary,
 )
 
 st.set_page_config(
@@ -225,23 +225,21 @@ def render_open_positions_table(open_df: pd.DataFrame) -> None:
 
 
 def _sync_bot_filters(status: dict) -> tuple[str, str]:
-    """Sincroniza filtros del sidebar con el estado del bot (Telegram)."""
+    """Sincroniza modo con Telegram. El filtro de estilo NO se toca (histórico)."""
     active_style = status.get("trading_style", "swing")
     bot_mode = status.get("bot_mode", "shadow")
     mode_options = ["shadow", "paper", "live"]
     if bot_mode not in mode_options:
         bot_mode = "shadow"
 
-    if st.session_state.get("nw_bot_style") != active_style:
-        st.session_state["nw_bot_style"] = active_style
-        st.session_state["nw_style_filter"] = active_style
+    st.session_state["nw_bot_style"] = active_style
 
     if st.session_state.get("nw_bot_mode_sync") != bot_mode:
         st.session_state["nw_bot_mode_sync"] = bot_mode
         st.session_state["nw_mode_filter"] = bot_mode
 
     if "nw_style_filter" not in st.session_state:
-        st.session_state["nw_style_filter"] = active_style
+        st.session_state["nw_style_filter"] = "todos"
     if "nw_mode_filter" not in st.session_state:
         st.session_state["nw_mode_filter"] = bot_mode
 
@@ -249,8 +247,8 @@ def _sync_bot_filters(status: dict) -> tuple[str, str]:
 
 
 def _style_filter_options(active_style: str) -> list[str]:
-    others = [s for s in TRADING_STYLES if s != active_style]
-    return [active_style, "todos"] + others
+    others = [s for s in TRADING_STYLES if s not in (active_style, "todos")]
+    return ["todos", active_style] + others
 
 
 def _safe_index(options: list, value, default: int = 0) -> int:
@@ -262,9 +260,9 @@ def _safe_index(options: list, value, default: int = 0) -> int:
 
 def _style_filter_label(value: str, active_style: str) -> str:
     if value == "todos":
-        return "Todos los estilos"
+        return "Todos los estilos (histórico completo)"
     if value == active_style:
-        return f"▶ {STYLE_LABELS.get(value, value)} (activo Telegram)"
+        return f"▶ {STYLE_LABELS.get(value, value)} (solo estilo activo bot)"
     return STYLE_LABELS.get(value, value)
 
 
@@ -359,6 +357,24 @@ def main():
                 st.rerun()
 
         st.divider()
+        st.markdown("**Base de datos**")
+        db = get_db_summary(mode)
+        st.caption(
+            f"Total en SQLite: **{db['total_trades']}** trades "
+            f"({db['closed_trades']} cerrados · {db['open_trades']} abiertos)"
+        )
+        if db.get("by_style"):
+            parts = [
+                f"{STYLE_LABELS.get(k, k)}: {v}"
+                for k, v in db["by_style"].items()
+            ]
+            st.caption("Por estilo: " + " · ".join(parts))
+        if db.get("last_trade_time"):
+            st.caption(f"Último trade: {db['last_trade_time']}")
+        if db.get("last_signal_time"):
+            st.caption(f"Última señal: {db['last_signal_time']}")
+
+        st.divider()
         st.markdown("**Pares activos**")
         for sym in cfg.TRADING_PAIRS:
             st.caption(f"· `{sym}`")
@@ -386,16 +402,21 @@ def main():
     metrics = get_metrics(mode, days, style_param, symbol_param)
     closed = get_closed_trades_df(mode, days, style_param, symbol_param)
     open_df = get_open_trades_df(mode)
+    db = get_db_summary(mode)
     if symbol_param and not open_df.empty and "symbol" in open_df.columns:
         open_df = open_df[open_df["symbol"] == symbol_param]
-    if style_param and not open_df.empty and "trading_style" in open_df.columns:
-        open_df = open_df[
-            (open_df["trading_style"] == style_param) | open_df["trading_style"].isna()]
-    signals = get_signals_df(days=min(days, 30))
+    signals = get_signals_df(days=min(days, 30), limit=500)
     if style_param and not signals.empty and "trading_style" in signals.columns:
         signals = signals[
             (signals["trading_style"] == style_param) | signals["trading_style"].isna()
         ]
+
+    if style_param and db["closed_trades"] > len(closed):
+        hidden = db["closed_trades"] - len(closed)
+        st.warning(
+            f"El filtro de estilo oculta **{hidden}** trade(s) cerrado(s). "
+            f"Cambia **Estilo (datos)** a **Todos los estilos (histórico completo)**."
+        )
 
     # ── Alertas de estado ─────────────────────────────────
     if status.get("bot_killed"):
@@ -516,9 +537,14 @@ def main():
             st.info(f"Sin señales registradas en {tf} para el filtro seleccionado.")
         else:
             sig_display = signals[[
-                "timestamp", "symbol", "direction", "score_bull", "score_bear",
-                "trail_dir", "htf_bull", "regime_ok", "acted_on",
+                "timestamp", "symbol", "trading_style", "direction",
+                "score_bull", "score_bear", "trail_dir", "htf_bull",
+                "regime_ok", "acted_on",
             ]].copy()
+            if "trading_style" in sig_display.columns:
+                sig_display["trading_style"] = sig_display["trading_style"].map(
+                    lambda x: STYLE_LABELS.get(str(x), x) if pd.notna(x) else "—"
+                )
             st.dataframe(sig_display, use_container_width=True, hide_index=True)
 
             longs = (signals["direction"] == "long").sum()
