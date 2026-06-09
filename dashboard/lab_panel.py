@@ -3,6 +3,7 @@ lab_panel.py — Backtesting con fechas custom y gestión de estrategias nombrad
 """
 from __future__ import annotations
 
+import os
 from datetime import date, datetime
 
 import pandas as pd
@@ -10,7 +11,8 @@ import plotly.express as px
 import streamlit as st
 
 import config as cfg
-from bot.backtest import run_backtest, MAX_BACKTEST_BARS
+from bot.backtest import run_backtest, run_backtest_csv, MAX_BACKTEST_BARS
+from bot.ema_rsi_atr import DEFAULT_EMA_RSI_ATR_PARAMS
 from bot.data_fetcher import estimate_bars_between
 from bot.database import (
     save_strategy, list_strategies, get_strategy, delete_strategy,
@@ -29,7 +31,16 @@ def _build_params_from_ui(style: str, strategy_type: str, hmm_extra: dict) -> di
     params.update(hmm_extra)
     params["use_hmm_regime"] = STRATEGY_TYPES[strategy_type].get("use_hmm_regime", False)
     params["strategy_type"] = strategy_type
+    if STRATEGY_TYPES.get(strategy_type, {}).get("ema_rsi_atr"):
+        params.update(DEFAULT_EMA_RSI_ATR_PARAMS)
+        params["initial_capital"] = 1000.0
+        params["leverage"] = 3.0
+        params["commission_pct"] = 0.001
     return params
+
+
+def _is_ema_rsi_atr(strategy_type: str) -> bool:
+    return bool(STRATEGY_TYPES.get(strategy_type, {}).get("ema_rsi_atr"))
 
 
 def _safe_style_index(style_key: str) -> int:
@@ -106,7 +117,7 @@ def render_strategies_tab():
 
         st.markdown(f"*{STRATEGY_TYPES[strategy_type]['description']}*")
 
-        if strategy_type in ("hmm_confluence", "hmm_regime"):
+        if strategy_type in ("hmm_confluence", "hmm_regime", "ema_rsi_atr_hmm", "nextwave_v2_hmm"):
             hc1, hc2, hc3 = st.columns(3)
             with hc1:
                 hmm_states = st.number_input("Estados HMM", 2, 5, 3)
@@ -206,7 +217,7 @@ def render_backtest_tab():
     with c1:
         symbol = st.selectbox("Par", pair_options, index=sym_index)
     with c2:
-        default_start = date(2024, 1, 1)
+        default_start = date(2018, 1, 1)
         start_d = st.date_input("Desde", value=default_start)
     with c3:
         end_d = st.date_input("Hasta", value=date.today())
@@ -230,6 +241,20 @@ def render_backtest_tab():
                 int(min(max(p.get("leverage", 3), 3), 5)),
             )
             params["leverage"] = float(lev)
+        elif _is_ema_rsi_atr(strategy_type):
+            ec1, ec2, ec3 = st.columns(3)
+            with ec1:
+                params["ema_fast"] = st.number_input("EMA rápida", 5, 50, int(p.get("ema_fast", 21)))
+                params["ema_slow"] = st.number_input("EMA lenta", 20, 200, int(p.get("ema_slow", 55)))
+            with ec2:
+                params["sl_atr_mult"] = st.number_input("SL (x ATR)", 0.5, 4.0, float(p.get("sl_atr_mult", 1.5)), 0.1)
+                params["tp_atr_mult"] = st.number_input("TP (x ATR)", 1.0, 6.0, float(p.get("tp_atr_mult", 3.0)), 0.1)
+            with ec3:
+                params["leverage"] = float(st.slider(
+                    "Apalancamiento (x3–x5)", 3, 5,
+                    int(min(max(p.get("leverage", 3), 3), 5)),
+                ))
+                params["allow_shorts"] = st.checkbox("Permitir shorts", value=bool(p.get("allow_shorts", True)))
     else:
         c4, c5 = st.columns(2)
         with c4:
@@ -252,7 +277,7 @@ def render_backtest_tab():
             timeframe = st.selectbox("Timeframe", tf_opts, index=tf_opts.index(tf_def))
             htf = st.selectbox("HTF", htf_opts, index=htf_opts.index(htf_def))
 
-        if strategy_type in ("hmm_confluence", "hmm_regime"):
+        if strategy_type in ("hmm_confluence", "hmm_regime", "ema_rsi_atr_hmm", "nextwave_v2_hmm"):
             hmm_states = st.slider("Estados HMM", 2, 5, 3)
             hmm_train = st.slider("Barras entrenamiento HMM", 100, 1000, 500)
             hmm_extra = {
@@ -263,13 +288,36 @@ def render_backtest_tab():
         else:
             hmm_extra = {}
         params = _build_params_from_ui(style, strategy_type, hmm_extra)
+        if _is_ema_rsi_atr(strategy_type):
+            ec1, ec2 = st.columns(2)
+            with ec1:
+                params["ema_fast"] = st.number_input("EMA rápida", 5, 50, 21, key="ema_fast_manual")
+                params["ema_slow"] = st.number_input("EMA lenta", 20, 200, 55, key="ema_slow_manual")
+            with ec2:
+                params["sl_atr_mult"] = st.number_input("SL (x ATR)", 0.5, 4.0, 1.5, 0.1, key="sl_manual")
+                params["tp_atr_mult"] = st.number_input("TP (x ATR)", 1.0, 6.0, 3.0, 0.1, key="tp_manual")
+            params["leverage"] = float(st.slider("Apalancamiento (x3–x5)", 3, 5, 3, key="lev_manual"))
+            params["allow_shorts"] = st.checkbox("Permitir shorts", value=True, key="shorts_manual")
+
+    csv_path = None
+    if _is_ema_rsi_atr(strategy_type):
+        st.caption(
+            "EMA-RSI-ATR usa CSV local si existe en Downloads o sube uno abajo."
+        )
+        up = st.file_uploader("CSV Binance (opcional)", type=["csv"], key="lab_csv_upload")
+        if up is not None:
+            import tempfile
+            tmp = os.path.join(tempfile.gettempdir(), f"lab_btc_{timeframe}.csv")
+            with open(tmp, "wb") as f:
+                f.write(up.getbuffer())
+            csv_path = tmp
+            params["csv_path"] = tmp
 
     cap_default = float((saved or {}).get("params", {}).get("initial_capital", 1000.0))
     c6, c7, c8 = st.columns(3)
     with c6:
         capital = st.number_input("Capital inicial (USDT)", 100.0, 1_000_000.0, cap_default, 100.0)
-        if saved:
-            params["initial_capital"] = float(capital)
+        params["initial_capital"] = float(capital)
     with c7:
         save_name = st.text_input(
             "Nombre para guardar resultado",
@@ -290,18 +338,41 @@ def render_backtest_tab():
         st.caption(f"~{est:,} velas estimadas en {timeframe}")
 
     if st.button("Ejecutar backtest", type="primary"):
-        with st.spinner(f"Descargando datos y simulando {symbol}…"):
+        spinner = "CSV local" if _is_ema_rsi_atr(strategy_type) else f"Descargando {symbol}"
+        with st.spinner(f"{spinner} y simulando…"):
             try:
-                result = run_backtest(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    htf=htf,
-                    params=params,
-                    start_date=since_ts.isoformat(),
-                    end_date=until_ts.isoformat(),
-                    strategy_type=strategy_type,
-                    capital=float(capital),
-                )
+                if _is_ema_rsi_atr(strategy_type):
+                    try:
+                        result = run_backtest_csv(
+                            timeframe=timeframe,
+                            params=params,
+                            start_date=since_ts.isoformat(),
+                            end_date=until_ts.isoformat(),
+                            strategy_type=strategy_type,
+                            csv_path=csv_path or params.get("csv_path"),
+                        )
+                    except FileNotFoundError:
+                        result = run_backtest(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            htf=htf,
+                            params=params,
+                            start_date=since_ts.isoformat(),
+                            end_date=until_ts.isoformat(),
+                            strategy_type=strategy_type,
+                            capital=float(capital),
+                        )
+                else:
+                    result = run_backtest(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        htf=htf,
+                        params=params,
+                        start_date=since_ts.isoformat(),
+                        end_date=until_ts.isoformat(),
+                        strategy_type=strategy_type,
+                        capital=float(capital),
+                    )
                 st.session_state["lab_last_backtest"] = result
                 st.session_state["lab_last_backtest_meta"] = {
                     "strategy_name": save_name,

@@ -4,6 +4,7 @@ backtest.py — Motor de backtesting con rangos de fechas personalizados
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 
 import numpy as np
@@ -24,6 +25,8 @@ from bot.regime_hmm import (
     hmm_allows_long, hmm_allows_short, merge_hmm_params,
 )
 from bot.strategy_types import apply_strategy_type_params, STRATEGY_TYPES
+from bot.csv_data_loader import load_btc_csv, default_csv_paths
+from bot.ema_rsi_atr import run_ema_rsi_atr_backtest, DEFAULT_EMA_RSI_ATR_PARAMS
 from config import POSITION_SIZE_PCT
 
 logger = logging.getLogger(__name__)
@@ -407,10 +410,34 @@ def run_backtest(
     df_ltf = fetch_ohlcv_range(symbol, timeframe, fetch_since, until)
     df_htf = fetch_ohlcv_range(symbol, htf, fetch_since, until)
 
+    params = apply_strategy_type_params(params, strategy_type)
+    cfg = STRATEGY_TYPES.get(strategy_type, STRATEGY_TYPES["confluence"])
+
+    if cfg.get("ema_rsi_atr"):
+        merged = {**DEFAULT_EMA_RSI_ATR_PARAMS, **params}
+        start_idx = int(df_ltf.index.searchsorted(since))
+        end_idx = int(df_ltf.index.searchsorted(until, side="right"))
+        regime_series = None
+        if merged.get("use_hmm_regime"):
+            regime_series = compute_regime_series(df_ltf, merged)
+        result = run_ema_rsi_atr_backtest(
+            df_ltf, merged, regime_series=regime_series,
+            start_idx=start_idx, end_idx=end_idx,
+        )
+        result["symbol"] = symbol
+        result["timeframe"] = timeframe
+        result["htf"] = htf
+        result["start_date"] = since.isoformat()
+        result["end_date"] = until.isoformat()
+        result["strategy_type"] = strategy_type
+        result["capital"] = float(merged.get("initial_capital", capital))
+        result["bars_fetched"] = len(df_ltf)
+        result["data_source"] = "binance"
+        return result
+
     start_idx = int(df_ltf.index.searchsorted(since))
     start_idx = max(start_idx, max(int(params.get("min_ltf_bars", 200)), 300))
 
-    params = apply_strategy_type_params(params, strategy_type)
     capital = float(params.get("initial_capital", capital))
     regime_series = None
     if params.get("use_hmm_regime"):
@@ -431,4 +458,71 @@ def run_backtest(
     result["strategy_type"] = strategy_type
     result["capital"] = capital
     result["bars_fetched"] = len(df_ltf)
+    return result
+
+
+def _resolve_csv_path(timeframe: str, params: dict) -> str | None:
+    explicit = params.get("csv_path")
+    if explicit and os.path.isfile(explicit):
+        return explicit
+    paths = default_csv_paths()
+    path = paths.get(timeframe)
+    if path and os.path.isfile(path):
+        return path
+    win = os.path.join(r"C:\Users\cayet\Downloads", f"btc_{timeframe}_data_2018_to_2025.csv")
+    return win if os.path.isfile(win) else None
+
+
+def run_backtest_csv(
+    timeframe: str,
+    params: dict,
+    start_date: datetime | str,
+    end_date: datetime | str | None = None,
+    strategy_type: str = "ema_rsi_atr",
+    csv_path: str | None = None,
+) -> dict:
+    """Backtest EMA-RSI-ATR desde CSV local (Binance export)."""
+    params = apply_strategy_type_params(params, strategy_type)
+    merged = {**DEFAULT_EMA_RSI_ATR_PARAMS, **params}
+    path = csv_path or _resolve_csv_path(timeframe, merged)
+    if not path:
+        raise FileNotFoundError(
+            f"No hay CSV para {timeframe}. Sube btc_{timeframe}_data_2018_to_2025.csv "
+            "o indica csv_path en params."
+        )
+
+    if isinstance(start_date, str):
+        start_date = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+    if end_date is None:
+        end_date = datetime.now(timezone.utc)
+    elif isinstance(end_date, str):
+        end_date = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+
+    since = _as_utc_timestamp(start_date)
+    until = _as_utc_timestamp(end_date)
+
+    df = load_btc_csv(path)
+    start_idx = int(df.index.searchsorted(since))
+    end_idx = int(df.index.searchsorted(until, side="right"))
+    if end_idx - start_idx < 100:
+        raise ValueError(f"Datos insuficientes tras filtrar fechas ({end_idx - start_idx} velas).")
+
+    regime_series = None
+    if merged.get("use_hmm_regime"):
+        regime_series = compute_regime_series(df, merged)
+
+    result = run_ema_rsi_atr_backtest(
+        df, merged, regime_series=regime_series,
+        start_idx=start_idx, end_idx=end_idx,
+    )
+    result["symbol"] = merged.get("symbol", "BTC/USDT")
+    result["timeframe"] = timeframe
+    result["htf"] = merged.get("htf", "—")
+    result["start_date"] = since.isoformat()
+    result["end_date"] = until.isoformat()
+    result["strategy_type"] = strategy_type
+    result["capital"] = float(merged.get("initial_capital", 1000))
+    result["bars_fetched"] = len(df)
+    result["data_source"] = "csv"
+    result["csv_path"] = path
     return result

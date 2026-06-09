@@ -36,6 +36,20 @@ STRATEGY_TYPES: dict[str, dict] = {
         "hmm_pure": False,
         "nextwave_v2": True,
     },
+    "ema_rsi_atr": {
+        "label": "EMA + RSI + ATR (momentum)",
+        "description": "Tendencia EMA 21/55, RSI 50-70, filtro ATR, SL/TP dinámicos.",
+        "use_hmm_regime": False,
+        "hmm_pure": False,
+        "ema_rsi_atr": True,
+    },
+    "ema_rsi_atr_hmm": {
+        "label": "EMA + RSI + ATR + HMM",
+        "description": "Momentum EMA-RSI-ATR filtrado por régimen HMM (long bull, short bear).",
+        "use_hmm_regime": True,
+        "hmm_pure": False,
+        "ema_rsi_atr": True,
+    },
 }
 
 
@@ -50,4 +64,6 @@ def apply_strategy_type_params(params: dict, strategy_type: str) -> dict:
     out["strategy_type"] = strategy_type
     if cfg.get("nextwave_v2"):
         out["nextwave_v2"] = True
+    if cfg.get("ema_rsi_atr"):
+        out["ema_rsi_atr"] = True
     return out

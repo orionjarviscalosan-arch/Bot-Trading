@@ -4,6 +4,7 @@ strategy_presets.py — Estrategias predefinidas para el laboratorio de backtest
 from __future__ import annotations
 
 from bot.regime_hmm import DEFAULT_HMM_PARAMS
+from bot.ema_rsi_atr import DEFAULT_EMA_RSI_ATR_PARAMS
 
 # Parámetros alineados con Pine «NextWave Suite v2» — modo Day Trader en 4H
 # HTF 1D · capital 1000 · comisión Binance 0.10%/lado · apalancamiento x3
@@ -74,6 +75,63 @@ NEXTWAVE_V2_BTC_4H: dict = {
     },
 }
 
+# Optimizado en CSV BTC 2018-2025 (grid 1458 combos, sin HMM)
+# Mejor score compuesto: +370 USDT, PF 1.69, DD ~42%, 63 trades
+EMA_RSI_ATR_BTC_1D: dict = {
+    "name": "EMA-RSI-ATR optimizado - BTC 1D",
+    "strategy_type": "ema_rsi_atr",
+    "trading_style": "swing",
+    "symbol": "BTC/USDT",
+    "timeframe": "1d",
+    "htf": "1d",
+    "notes": (
+        "Momentum EMA 21/55 + RSI 50-70 + filtro ATR. "
+        "Optimizado en CSV Binance 2018-2025 · capital 1000 · leverage x3 · "
+        "SL 1.5×ATR · TP 3×ATR · sin HMM (mejor Calmar que 4H/15m)."
+    ),
+    "params": {
+        **DEFAULT_EMA_RSI_ATR_PARAMS,
+        "ema_fast": 21,
+        "ema_slow": 55,
+        "sl_atr_mult": 1.5,
+        "tp_atr_mult": 3.0,
+        "atr_filter_mult": 1.0,
+        "allow_longs": True,
+        "allow_shorts": True,
+        "risk_pct": 1.0,
+        "leverage": 3.0,
+        "commission_pct": 0.001,
+        "slippage_pct": 0.0001,
+        "spread_pct": 0.0002,
+        "initial_capital": 1000.0,
+        "cooldown_bars": 4,
+        "use_hmm_regime": False,
+    },
+}
+
+EMA_RSI_ATR_BTC_4H: dict = {
+    "name": "EMA-RSI-ATR optimizado - BTC 4H",
+    "strategy_type": "ema_rsi_atr",
+    "trading_style": "swing",
+    "symbol": "BTC/USDT",
+    "timeframe": "4h",
+    "htf": "1d",
+    "notes": (
+        "Variante 4H: mayor PnL bruto (+818 USDT en backtest) pero drawdown alto. "
+        "Usar solo si aceptas más volatilidad; preferir preset 1D."
+    ),
+    "params": {
+        **DEFAULT_EMA_RSI_ATR_PARAMS,
+        "risk_pct": 1.0,
+        "leverage": 3.0,
+        "commission_pct": 0.001,
+        "initial_capital": 1000.0,
+        "use_hmm_regime": False,
+    },
+}
+
 BUILTIN_STRATEGIES: list[dict] = [
+    EMA_RSI_ATR_BTC_1D,
+    EMA_RSI_ATR_BTC_4H,
     NEXTWAVE_V2_BTC_4H,
 ]
