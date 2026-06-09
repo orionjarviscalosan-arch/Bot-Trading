@@ -452,6 +452,12 @@ def compute_all(df_4h: pd.DataFrame, df_1d: pd.DataFrame,
     # ── Score de confluencia ──────────────────────────────
     score = calc_confluence_score(row_4h, row_htf, p)
 
+    if p.get("use_hmm_regime"):
+        from bot.regime_hmm import predict_current_regime
+        regime_label, regime_probs = predict_current_regime(df_4h, p)
+        score["hmm_regime"] = regime_label
+        score["hmm_probs"] = regime_probs
+
     # ── Niveles de entrada ────────────────────────────────
     current_price = float(df_4h["close"].iloc[-1])
     trail_level   = float(df_4h["trail_level"].iloc[-1])
@@ -561,9 +567,21 @@ def get_signal(state: dict, params: dict,
             )
 
     if long_signal:
-        return "long"
+        return _apply_hmm_entry_filter("long", sc, p)
     if short_signal:
-        return "short"
+        return _apply_hmm_entry_filter("short", sc, p)
     if close_signal:
         return "close"
     return "none"
+
+
+def _apply_hmm_entry_filter(signal: str, sc: dict, params: dict) -> str:
+    if signal not in ("long", "short") or not params.get("use_hmm_regime"):
+        return signal
+    from bot.regime_hmm import hmm_allows_long, hmm_allows_short
+    regime = sc.get("hmm_regime", "range")
+    if signal == "long" and not hmm_allows_long(regime, params):
+        return "none"
+    if signal == "short" and not hmm_allows_short(regime, params):
+        return "none"
+    return signal

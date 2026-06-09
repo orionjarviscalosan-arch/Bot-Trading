@@ -69,6 +69,68 @@ def fetch_ohlcv(symbol: str, timeframe: str, limit: int = CANDLES_LB) -> pd.Data
 
     raise RuntimeError(f"No se pudieron obtener datos después de {retries} intentos")
 
+
+def fetch_ohlcv_range(
+    symbol: str,
+    timeframe: str,
+    since: pd.Timestamp,
+    until: pd.Timestamp | None = None,
+    max_bars: int | None = None,
+) -> pd.DataFrame:
+    """
+    Descarga OHLCV histórico paginado entre fechas (UTC).
+    since/until: pd.Timestamp con tz UTC.
+    """
+    ex = get_exchange()
+    until = until or pd.Timestamp.now(tz="UTC")
+    since_ms = int(since.timestamp() * 1000)
+    until_ms = int(until.timestamp() * 1000)
+    limit = 1000
+    all_rows: list = []
+    cursor = since_ms
+
+    while cursor < until_ms:
+        batch = ex.fetch_ohlcv(symbol, timeframe, since=cursor, limit=limit)
+        if not batch:
+            break
+        for row in batch:
+            if row[0] <= until_ms:
+                all_rows.append(row)
+        last_ts = batch[-1][0]
+        if last_ts <= cursor:
+            break
+        cursor = last_ts + 1
+        if max_bars and len(all_rows) >= max_bars:
+            all_rows = all_rows[:max_bars]
+            break
+        time.sleep(max(ex.rateLimit / 1000, 0.05))
+
+    if not all_rows:
+        raise RuntimeError(
+            f"Sin datos OHLCV para {symbol} {timeframe} "
+            f"entre {since} y {until}")
+
+    df = pd.DataFrame(all_rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+    df.set_index("timestamp", inplace=True)
+    df = df.astype(float)
+    df = df[~df.index.duplicated(keep="last")]
+    df = df.sort_index()
+    df = df[(df.index >= since) & (df.index <= until)]
+
+    now_utc = datetime.now(timezone.utc)
+    if len(df) > 0 and df.index[-1] >= now_utc - timeframe_to_timedelta(timeframe):
+        df = df.iloc[:-1]
+
+    return df
+
+
+def estimate_bars_between(since: pd.Timestamp, until: pd.Timestamp, timeframe: str) -> int:
+    """Estima número de velas entre dos fechas."""
+    delta = until - since
+    td = timeframe_to_timedelta(timeframe)
+    return max(int(delta / td), 1)
+
 def fetch_balance(symbol_base: str = "USDT") -> float:
     """Obtiene el balance disponible de un activo."""
     ex = get_exchange()

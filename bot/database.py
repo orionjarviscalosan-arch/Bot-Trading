@@ -96,6 +96,40 @@ def init_db():
             value TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        -- Estrategias nombradas (backtest / laboratorio)
+        CREATE TABLE IF NOT EXISTS strategies (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            name           TEXT UNIQUE NOT NULL,
+            strategy_type  TEXT NOT NULL DEFAULT 'confluence',
+            trading_style  TEXT,
+            symbol         TEXT,
+            timeframe      TEXT,
+            htf            TEXT,
+            params         TEXT NOT NULL,
+            notes          TEXT,
+            created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Resultados de backtests guardados
+        CREATE TABLE IF NOT EXISTS backtest_runs (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id    INTEGER,
+            strategy_name  TEXT,
+            symbol         TEXT NOT NULL,
+            timeframe      TEXT,
+            htf            TEXT,
+            strategy_type  TEXT,
+            start_date     TEXT NOT NULL,
+            end_date       TEXT NOT NULL,
+            capital        REAL DEFAULT 10000,
+            metrics        TEXT,
+            trades_json    TEXT,
+            equity_json    TEXT,
+            created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+        );
         """)
         _migrate_schema(conn)
     logger.info("Base de datos inicializada")
@@ -324,3 +358,104 @@ def compute_metrics(trades: list) -> dict:
         "avg_win":        round(sum(wins)   / len(wins)   if wins   else 0, 2),
         "avg_loss":       round(sum(losses) / len(losses) if losses else 0, 2),
     }
+
+
+# ── ESTRATEGIAS NOMBRADAS ─────────────────────────────────
+
+def save_strategy(name: str, strategy_type: str, params: dict,
+                  trading_style: str | None = None,
+                  symbol: str | None = None,
+                  timeframe: str | None = None,
+                  htf: str | None = None,
+                  notes: str | None = None,
+                  strategy_id: int | None = None) -> int:
+    name = name.strip()
+    if not name:
+        raise ValueError("El nombre de la estrategia no puede estar vacío")
+    with get_conn() as conn:
+        if strategy_id:
+            conn.execute("""
+                UPDATE strategies SET
+                    name = ?, strategy_type = ?, trading_style = ?, symbol = ?,
+                    timeframe = ?, htf = ?, params = ?, notes = ?,
+                    updated_at = ?
+                WHERE id = ?
+            """, (name, strategy_type, trading_style, symbol, timeframe, htf,
+                  json.dumps(params), notes, datetime.utcnow(), strategy_id))
+            return strategy_id
+        cur = conn.execute("""
+            INSERT INTO strategies
+            (name, strategy_type, trading_style, symbol, timeframe, htf, params, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (name, strategy_type, trading_style, symbol, timeframe, htf,
+              json.dumps(params), notes))
+        return cur.lastrowid
+
+
+def list_strategies() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM strategies ORDER BY updated_at DESC, name ASC"
+        ).fetchall()
+    return [_strategy_row(r) for r in rows]
+
+
+def _strategy_row(row) -> dict:
+    d = dict(row)
+    d["params"] = json.loads(d["params"])
+    return d
+
+
+def get_strategy(strategy_id: int | None = None, name: str | None = None) -> dict | None:
+    with get_conn() as conn:
+        if strategy_id is not None:
+            row = conn.execute(
+                "SELECT * FROM strategies WHERE id = ?", (strategy_id,)
+            ).fetchone()
+        elif name:
+            row = conn.execute(
+                "SELECT * FROM strategies WHERE name = ?", (name.strip(),)
+            ).fetchone()
+        else:
+            return None
+    return _strategy_row(row) if row else None
+
+
+def delete_strategy(strategy_id: int) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM strategies WHERE id = ?", (strategy_id,))
+    return cur.rowcount > 0
+
+
+def save_backtest_run(strategy_name: str, symbol: str, start_date: str,
+                      end_date: str, metrics: dict, trades: list,
+                      equity_curve: list, strategy_id: int | None = None,
+                      strategy_type: str | None = None,
+                      timeframe: str | None = None, htf: str | None = None,
+                      capital: float = 10000.0) -> int:
+    with get_conn() as conn:
+        cur = conn.execute("""
+            INSERT INTO backtest_runs
+            (strategy_id, strategy_name, symbol, timeframe, htf, strategy_type,
+             start_date, end_date, capital, metrics, trades_json, equity_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (strategy_id, strategy_name, symbol, timeframe, htf, strategy_type,
+              start_date, end_date, capital,
+              json.dumps(metrics), json.dumps(trades), json.dumps(equity_curve)))
+        return cur.lastrowid
+
+
+def list_backtest_runs(limit: int = 50) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT * FROM backtest_runs
+            ORDER BY created_at DESC LIMIT ?
+        """, (limit,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["metrics"] = json.loads(d["metrics"]) if d.get("metrics") else {}
+        d["trades"] = json.loads(d["trades_json"]) if d.get("trades_json") else []
+        d["equity_curve"] = json.loads(d["equity_json"]) if d.get("equity_json") else []
+        out.append(d)
+    return out

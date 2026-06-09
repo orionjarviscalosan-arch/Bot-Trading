@@ -5,6 +5,7 @@ Prueba nuevos parámetros en backtest, promueve si mejoran métricas del set act
 import logging
 import itertools
 from datetime import datetime
+from bot.backtest import run_simulation
 from bot.database import (get_active_params, get_active_param_metrics, save_param_set,
                           get_recent_trades, compute_metrics, get_state, set_state)
 from bot.signal_engine import compute_all, get_signal
@@ -15,90 +16,10 @@ from config import OPTIMIZER, PARAM_GRID, SIGNAL_PARAMS, POSITION_SIZE_PCT
 logger = logging.getLogger(__name__)
 
 
-def run_simulation(df_4h, df_1d, params: dict) -> dict:
-    """
-    Simula el backtest de un set de parámetros sobre datos históricos.
-    Soporta long y short. Devuelve las métricas del set.
-    """
-    trades = []
-    capital = 10000.0
-    pos = None
-    last_long = None
-    last_short = None
-    bar_i = 0
-    position_pct = params.get("position_size_pct", POSITION_SIZE_PCT)
-
-    for i in range(300, len(df_4h)):
-        chunk_4h = df_4h.iloc[:i + 1]
-        chunk_1d = df_1d
-
-        try:
-            state = compute_all(chunk_4h, chunk_1d, params)
-        except Exception:
-            continue
-
-        price = state["price"]
-        trail_lv = state["trail_level"]
-        trail_dir = state["trail_dir"]
-        sc = state["score"]
-
-        open_trade = None
-        if pos is not None:
-            open_trade = {
-                "side": pos["side"],
-                "stop_loss": pos["sl"],
-                "take_profit": pos["tp"],
-            }
-
-        signal = get_signal(state, params, last_long, last_short, bar_i, open_trade)
-
-        if pos is not None:
-            exit_reason = check_exit_conditions(
-                price, open_trade, trail_lv, trail_dir, score=sc, params=params)
-
-            if exit_reason:
-                pnl, _ = calc_trade_pnl(pos["entry"], price, pos["qty"], pos["side"])
-                trades.append(pnl)
-                pos = None
-            else:
-                new_sl = compute_trailing_stop(trail_lv, state["atr"], pos["side"])
-                if pos["side"] == "short" and new_sl < pos["sl"]:
-                    pos["sl"] = new_sl
-                elif pos["side"] == "long" and new_sl > pos["sl"]:
-                    pos["sl"] = new_sl
-
-        if signal == "long" and pos is None:
-            entry = price
-            qty = (capital * position_pct) / entry
-            pos = {
-                "side": "long",
-                "entry": entry,
-                "sl": state["long_sl"],
-                "tp": state["long_tp"],
-                "qty": qty,
-            }
-            last_long = bar_i
-
-        elif signal == "short" and pos is None:
-            entry = price
-            qty = (capital * position_pct) / entry
-            pos = {
-                "side": "short",
-                "entry": entry,
-                "sl": state["short_sl"],
-                "tp": state["short_tp"],
-                "qty": qty,
-            }
-            last_short = bar_i
-
-        bar_i += 1
-
-    if pos:
-        last_price = df_4h["close"].iloc[-1]
-        pnl, _ = calc_trade_pnl(pos["entry"], last_price, pos["qty"], pos["side"])
-        trades.append(pnl)
-
-    return compute_metrics([{"pnl_usdt": p} for p in trades])
+def run_simulation_legacy(df_4h, df_1d, params: dict) -> dict:
+    """Compatibilidad: delega al motor de backtest unificado."""
+    result = run_simulation(df_4h, df_1d, params, strategy_type="confluence")
+    return result.get("metrics", {})
 
 
 def find_best_params(df_4h, df_1d) -> tuple[dict, dict]:
@@ -124,7 +45,7 @@ def find_best_params(df_4h, df_1d) -> tuple[dict, dict]:
             candidate[k] = v
 
         try:
-            metrics = run_simulation(df_4h, df_1d, candidate)
+            metrics = run_simulation_legacy(df_4h, df_1d, candidate)
         except Exception as e:
             logger.debug(f"Combo falló: {e}")
             continue

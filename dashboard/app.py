@@ -28,6 +28,7 @@ from bot.dashboard_data import (
 from dashboard.chart_payload import build_chart_payload
 from dashboard.chart_renderer import render_chart, CHART_ENGINES
 from dashboard.charts import get_chart_ohlcv, CHART_CANDLE_LIMIT
+from dashboard.lab_panel import render_lab_panel
 
 st.set_page_config(
     page_title="Nextwaves Bot Dashboard",
@@ -457,8 +458,9 @@ def main():
 
     st.divider()
 
-    tab_chart, tab_open, tab_equity, tab_trades, tab_signals, tab_reasons = st.tabs(
-        ["Gráfico", "Posiciones abiertas", "Curva de equity", "Operaciones", "Señales", "Por motivo de salida"]
+    tab_chart, tab_open, tab_equity, tab_trades, tab_signals, tab_reasons, tab_lab = st.tabs(
+        ["Gráfico", "Posiciones abiertas", "Curva de equity", "Operaciones",
+         "Señales", "Por motivo de salida", "Backtest & Estrategias"]
     )
 
     with tab_chart:
@@ -678,6 +680,9 @@ def main():
                     color_continuous_scale=["red", "yellow", "green"],
                 )
                 st.plotly_chart(fig4, use_container_width=True)
+
+    with tab_lab:
+        render_lab_panel()
 
 
 if __name__ == "__main__":
