@@ -1,6 +1,7 @@
 [server]
 headless = true
 enableCORS = false
+enableStaticServing = true
 # Mantener conexión viva en móvil / Tailscale
 websocketPingInterval = 20
 websocketPingTimeout = 120

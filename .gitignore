@@ -19,3 +19,8 @@ data/
 *.swp
 .DS_Store
 Thumbs.db
+
+# TradingView Charting Library (licencia privada — ver dashboard/charting_library/README.md)
+dashboard/charting_library/*
+!dashboard/charting_library/README.md
+dashboard/static/charting_library/

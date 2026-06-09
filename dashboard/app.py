@@ -25,7 +25,9 @@ from bot.dashboard_data import (
     get_signals_df, get_metrics, get_bot_status, build_equity_curve,
     enrich_open_trades, get_db_summary,
 )
-from dashboard.charts import get_chart_ohlcv, build_trade_chart, CHART_CANDLE_LIMIT
+from dashboard.charts import get_chart_ohlcv, CHART_CANDLE_LIMIT
+from dashboard.chart_payload import build_chart_payload
+from dashboard.tv_component import render_tradingview_chart, charting_library_status
 
 st.set_page_config(
     page_title="Nextwaves Bot Dashboard",
@@ -492,7 +494,7 @@ def main():
 
         try:
             ohlcv = get_chart_ohlcv(chart_symbol, chart_tf, CHART_CANDLE_LIMIT)
-            fig_chart = build_trade_chart(
+            payload = build_chart_payload(
                 ohlcv=ohlcv,
                 trades=all_trades,
                 open_trades=chart_open,
@@ -501,14 +503,43 @@ def main():
                 signals=chart_signals,
                 show_unacted_signals=show_unacted,
             )
-            st.plotly_chart(fig_chart, use_container_width=True)
+            engine = render_tradingview_chart(payload, height=680)
             n_closed = len(all_trades[all_trades["exit_time"].notna()]) if not all_trades.empty else 0
             n_open = len(chart_open)
-            st.caption(
-                f"**{chart_symbol}** · velas **{chart_tf}** (últimas {len(ohlcv)}) · "
-                f"modo **{mode}** · {n_closed} cierre(s) · {n_open} abierta(s). "
-                "▲ LONG · ▼ SHORT · ● salida · ◆ señal · líneas punteadas SL/TP."
-            )
+            n_marks = len(payload.get("markers", []))
+            cl_status = charting_library_status()
+
+            if engine == "charting_library":
+                st.caption(
+                    f"**TradingView Charting Library** · **{chart_symbol}** · **{chart_tf}** · "
+                    f"{len(payload.get('bars', []))} velas · {n_marks} marcas · "
+                    f"modo **{mode}** · {n_closed} cierre(s) · {n_open} abierta(s)."
+                )
+            else:
+                st.caption(
+                    f"**TradingView Lightweight Charts** · **{chart_symbol}** · **{chart_tf}** · "
+                    f"{len(payload.get('bars', []))} velas · {n_marks} marcas · "
+                    f"modo **{mode}** · {n_closed} cierre(s) · {n_open} abierta(s). "
+                    "Zoom con rueda · arrastrar para desplazar."
+                )
+                if not cl_status["active"]:
+                    with st.expander("Activar Charting Library completa (opcional)"):
+                        if not cl_status["files_installed"]:
+                            st.markdown(
+                                "1. Solicita la librería en "
+                                "[TradingView Charting Library](https://www.tradingview.com/HTML5-stock-chart-library/)\n"
+                                "2. Copia la carpeta `charting_library/` a "
+                                "`dashboard/static/charting_library/` en el VPS\n"
+                                "3. Añade `DASHBOARD_PUBLIC_URL=https://tu-dominio` al `.env`\n"
+                                "4. Reinicia el dashboard"
+                            )
+                        elif not cl_status["public_url_set"]:
+                            st.warning(
+                                "Archivos detectados, pero falta `DASHBOARD_PUBLIC_URL` en `.env` "
+                                "para cargar la Charting Library en el iframe."
+                            )
+                        else:
+                            st.info("Revisa `dashboard/charting_library/README.md`")
         except Exception as exc:
             st.error(f"No se pudo cargar el gráfico de {chart_symbol}: {exc}")
             st.caption(
