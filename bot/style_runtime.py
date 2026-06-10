@@ -43,7 +43,9 @@ def set_scheduler(scheduler) -> None:
     _scheduler = scheduler
 
 
-def _build(style: str, bot_mode: str) -> RuntimeConfig:
+def _build(style: str, bot_mode: str,
+           timeframe: str | None = None,
+           htf: str | None = None) -> RuntimeConfig:
     style = normalize_style(style)
     bot_mode = bot_mode.lower().strip()
     if bot_mode not in VALID_MODES:
@@ -53,8 +55,8 @@ def _build(style: str, bot_mode: str) -> RuntimeConfig:
     return RuntimeConfig(
         style=style,
         label=sc["label"],
-        timeframe=sc["timeframe"],
-        htf=sc["htf"],
+        timeframe=timeframe or sc["timeframe"],
+        htf=htf or sc["htf"],
         candles_lb=sc["candles_lb"],
         price_monitor_minutes=sc["price_monitor_minutes"],
         signal_params=params,
@@ -105,6 +107,8 @@ def _reset_bar_counters() -> None:
 
 
 def sync_params(rt: RuntimeConfig) -> None:
+    if get_state("active_strategy_id"):
+        return
     stored = get_state("active_trading_style")
     params_style = get_state("params_style")
     params = get_active_params()
@@ -165,6 +169,8 @@ def apply_style(style: str) -> str:
             f"Sin cambios."
         )
     old_label = rt.label
+    set_state("active_strategy_id", None)
+    set_state("active_strategy_name", None)
     _runtime = _build(new_style, rt.bot_mode)
     set_state("trading_style", new_style)
     _reset_bar_counters()
@@ -219,12 +225,17 @@ def get_status_message() -> str:
     rt = get_runtime()
     killed = get_state("bot_killed", False)
     pause = get_state("pause_until")
+    strat_name = get_state("active_strategy_name")
     open_trades = get_open_trades(rt.bot_mode)
     open_count = count_open_trades(rt.bot_mode)
 
     lines = [
         "📊 <b>Estado del bot</b>",
         f"Estilo: <b>{rt.label}</b> ({rt.timeframe} / HTF {rt.htf})",
+    ]
+    if strat_name:
+        lines.append(f"Estrategia: <b>{strat_name}</b>")
+    lines.extend([
         f"Modo: <b>{rt.bot_mode.upper()}</b>",
         f"Pares ({len(cfg.TRADING_PAIRS)}):",
         " · ".join(f"<code>{p}</code>" for p in cfg.TRADING_PAIRS),
@@ -233,7 +244,7 @@ def get_status_message() -> str:
         f"Score mín: {rt.signal_params['score_threshold']} · "
         f"R:R {rt.signal_params['rr_ratio']} · "
         f"Cooldown {rt.signal_params['cooldown_bars']} velas",
-    ]
+    ])
     if open_trades:
         lines.append("<b>Abiertas:</b>")
         for t in open_trades:
@@ -295,5 +306,6 @@ def get_help_message() -> str:
         "<b>Info</b>\n"
         "/pares — posiciones por par\n"
         "/estado — resumen completo\n"
+        "/reanudar — quitar pausa del kill switch\n"
         "/ayuda — este mensaje"
     )

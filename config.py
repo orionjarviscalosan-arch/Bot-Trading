@@ -99,9 +99,10 @@ PARAM_GRID = {
 
 # ── KILL SWITCH ──────────────────────────────────────────
 KILL_SWITCH = {
-    "max_daily_loss_pct":   0.05,
+    "max_daily_loss_pct":   0.08,
     "max_drawdown_pct":     0.15,
-    "max_consecutive_loss": 5,
+    "max_consecutive_loss": 7,
+    "pause_hours":          4,
 }
 
 DB_PATH = "data/nextwaves_bot.db"

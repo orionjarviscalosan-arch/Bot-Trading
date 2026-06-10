@@ -8,6 +8,8 @@ from config import KILL_SWITCH
 
 logger = logging.getLogger(__name__)
 
+PAUSE_HOURS = float(KILL_SWITCH.get("pause_hours", 4))
+
 
 class RiskManager:
     def __init__(self, initial_capital: float):
@@ -20,17 +22,18 @@ class RiskManager:
         Verifica si se deben activar las protecciones.
         Devuelve (parar, motivo).
         """
-        # ── Pausa temporal por pérdidas consecutivas ──────
         pause_until = get_state("pause_until")
         if pause_until:
-            pt = datetime.fromisoformat(pause_until)
-            if datetime.utcnow() < pt:
-                remaining = (pt - datetime.utcnow()).seconds // 60
-                return True, f"Pausa activa por {remaining} min más"
-            else:
-                set_state("pause_until", None)
+            pt = datetime.utcnow()
+            end = datetime.fromisoformat(pause_until)
+            if pt < end:
+                remaining = max(1, int((end - pt).total_seconds() // 60))
+                base = get_state("pause_reason") or "Pausa por riesgo"
+                return True, f"{base} ({remaining} min restantes)"
+            set_state("pause_until", None)
+            set_state("pause_reason", None)
+            set_state("kill_notify_sent", None)
 
-        # ── Drawdown máximo total ──────────────────────────
         dd_pct = (self.initial_capital - current_equity) / self.initial_capital
         if dd_pct >= KILL_SWITCH["max_drawdown_pct"]:
             msg = f"KILL SWITCH: Drawdown {dd_pct:.1%} ≥ máximo {KILL_SWITCH['max_drawdown_pct']:.1%}"
@@ -40,7 +43,6 @@ class RiskManager:
             set_state("kill_reason", msg)
             return True, msg
 
-        # ── Pérdida diaria máxima ──────────────────────────
         today_trades = self._get_today_trades(mode)
         daily_pnl    = sum(t.get("pnl_usdt", 0) for t in today_trades
                           if t.get("pnl_usdt") is not None)
@@ -48,27 +50,30 @@ class RiskManager:
         if daily_loss_pct >= KILL_SWITCH["max_daily_loss_pct"]:
             msg = f"Pérdida diaria {daily_loss_pct:.1%} ≥ máximo {KILL_SWITCH['max_daily_loss_pct']:.1%}"
             logger.warning(msg)
-            pause_hours = 24
-            set_state("pause_until", (datetime.utcnow() + timedelta(hours=pause_hours)).isoformat())
+            self._set_pause(msg, PAUSE_HOURS)
             return True, msg
 
-        # ── Pérdidas consecutivas ──────────────────────────
         recent = get_recent_trades(mode, days=30)
         if recent:
             consecutive = 0
-            for t in recent[:10]:
+            for t in recent[:15]:
                 pnl = t.get("pnl_usdt", 0)
                 if pnl is not None and pnl < 0:
                     consecutive += 1
                 else:
                     break
             if consecutive >= KILL_SWITCH["max_consecutive_loss"]:
-                msg = f"{consecutive} pérdidas consecutivas → pausa 24h"
+                msg = f"{consecutive} pérdidas consecutivas → pausa {PAUSE_HOURS:.0f}h"
                 logger.warning(msg)
-                set_state("pause_until", (datetime.utcnow() + timedelta(hours=24)).isoformat())
+                self._set_pause(msg, PAUSE_HOURS)
                 return True, msg
 
         return False, ""
+
+    def _set_pause(self, reason: str, hours: float) -> None:
+        until = datetime.utcnow() + timedelta(hours=hours)
+        set_state("pause_until", until.isoformat())
+        set_state("pause_reason", reason)
 
     def _get_today_trades(self, mode: str) -> list:
         all_trades = get_recent_trades(mode, days=1)
@@ -79,7 +84,6 @@ class RiskManager:
 
     def calc_position_size(self, equity: float, position_pct: float,
                            max_capital: float) -> float:
-        """Calcula el USDT a invertir en el siguiente trade"""
         usdt = min(equity * position_pct, max_capital)
         logger.debug(f"Position size: {usdt:.2f} USDT ({position_pct:.0%} de {equity:.2f})")
         return usdt
@@ -93,10 +97,18 @@ class RiskManager:
     def is_killed(self) -> bool:
         return bool(get_state("bot_killed", False))
 
+    def clear_pause(self) -> None:
+        set_state("pause_until", None)
+        set_state("pause_reason", None)
+        set_state("kill_notify_sent", None)
+        logger.info("Pausa temporal eliminada manualmente")
+
     def reset_kill(self):
         """Solo para uso manual tras revisión humana"""
         set_state("bot_killed", False)
         set_state("kill_reason", None)
         set_state("pause_until", None)
+        set_state("pause_reason", None)
+        set_state("kill_notify_sent", None)
         self.killed = False
         logger.info("Kill switch reseteado manualmente")

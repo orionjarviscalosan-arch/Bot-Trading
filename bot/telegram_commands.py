@@ -99,6 +99,17 @@ def _handle_command(chat_id: str, text: str) -> str | None:
             "<code>/day</code> · <code>/swing</code>"
         )
 
+    if cmd == "/reanudar":
+        from bot.risk_manager import RiskManager
+        rm = RiskManager(cfg.MAX_CAPITAL_USDT)
+        if get_state("bot_killed"):
+            return (
+                "El bot está en <b>KILL SWITCH</b> permanente.\n"
+                "Revisa el dashboard y resetea manualmente tras analizar el drawdown."
+            )
+        rm.clear_pause()
+        return "▶️ Pausa eliminada. El bot operará en la próxima vela."
+
     if cmd in _STYLE_COMMANDS:
         return apply_style(_STYLE_COMMANDS[cmd])
 

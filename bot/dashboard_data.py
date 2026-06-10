@@ -134,15 +134,25 @@ def get_bot_status() -> dict:
     active_style = resolve_active_style()
     style_cfg = TRADING_STYLES.get(active_style, TRADING_STYLES["swing"])
     bot_mode = _default_bot_mode()
+    strat_meta = None
+    sid = get_state("active_strategy_id")
+    if sid:
+        from bot.database import get_strategy
+        strat_meta = get_strategy(strategy_id=int(sid))
+    tf = (strat_meta or {}).get("timeframe") or style_cfg.get("timeframe", "4h")
+    htf = (strat_meta or {}).get("htf") or style_cfg.get("htf", "1d")
     return {
         "bot_killed": bool(get_state("bot_killed", False)),
         "kill_reason": get_state("kill_reason"),
         "pause_until": get_state("pause_until"),
         "active_params": get_active_params(),
+        "active_strategy_id": get_state("active_strategy_id"),
+        "active_strategy_name": get_state("active_strategy_name"),
+        "pause_reason": get_state("pause_reason"),
         "trading_style": active_style,
         "style_label": style_cfg.get("label", active_style),
-        "timeframe": style_cfg.get("timeframe", "4h"),
-        "htf": style_cfg.get("htf", "1d"),
+        "timeframe": tf,
+        "htf": htf,
         "bot_mode": bot_mode,
         "trading_pairs": cfg.TRADING_PAIRS,
         "max_active_pairs": cfg.MAX_ACTIVE_PAIRS,

@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from bot.database import (save_trade, get_open_trade, close_trade,
                           compute_metrics, get_recent_trades, update_trade_stop_loss)
-from bot.signal_engine import get_signal
+from bot.live_signals import get_trading_signal, use_trailing_exit
 from bot.order_manager import (
     check_exit_conditions, calc_trade_pnl, compute_trailing_stop, trade_side,
 )
@@ -83,22 +83,23 @@ def process_shadow_signal(state: dict, params: dict,
     new_long = None
     new_short = None
 
-    signal = get_signal(
+    signal = get_trading_signal(
         state, params, last_long_bar, last_short_bar,
         current_bar, open_trade)
 
     # ── Gestionar posición abierta (trail + salidas) ──────
     if open_trade:
         side = trade_side(open_trade)
-        new_sl = compute_trailing_stop(trail_lv, atr_val, side)
-        old_sl = open_trade["stop_loss"]
-        should_update = (
-            (side == "short" and new_sl < old_sl) or
-            (side == "long" and new_sl > old_sl)
-        )
-        if should_update:
-            update_trade_stop_loss(open_trade["trade_id"], new_sl)
-            open_trade["stop_loss"] = new_sl
+        if use_trailing_exit(params):
+            new_sl = compute_trailing_stop(trail_lv, atr_val, side)
+            old_sl = open_trade["stop_loss"]
+            should_update = (
+                (side == "short" and new_sl < old_sl) or
+                (side == "long" and new_sl > old_sl)
+            )
+            if should_update:
+                update_trade_stop_loss(open_trade["trade_id"], new_sl)
+                open_trade["stop_loss"] = new_sl
 
         exit_reason = check_exit_conditions(
             price, open_trade, trail_lv, trail_dir, score=sc, params=params)

@@ -25,6 +25,9 @@ from bot.dashboard_data import (
     get_signals_df, get_metrics, get_bot_status, build_equity_curve,
     enrich_open_trades, get_db_summary,
 )
+from bot.database import list_strategies
+from bot.strategy_runtime import apply_operating_strategy, get_active_strategy_id
+from bot.risk_manager import RiskManager
 from dashboard.chart_payload import build_chart_payload
 from dashboard.chart_renderer import render_chart, CHART_ENGINES
 from dashboard.charts import get_chart_ohlcv, CHART_CANDLE_LIMIT
@@ -282,8 +285,10 @@ def main():
     tf = status.get("timeframe", "4h")
     prefs = get_prefs()
     pairs_label = ", ".join(status.get("trading_pairs", cfg.TRADING_PAIRS))
+    strat_label = status.get("active_strategy_name")
+    strat_part = f" · estrategia **{strat_label}**" if strat_label else ""
     st.caption(
-        f"**{pairs_label}** · **{style_label}** ({tf}) · "
+        f"**{pairs_label}** · **{style_label}** ({tf}){strat_part} · "
         f"modo: **{status.get('bot_mode', 'shadow')}** · HTF {status.get('htf', '1d')} · "
         f"máx **{status.get('max_active_pairs', cfg.MAX_ACTIVE_PAIRS)}** pares · "
         f"{status.get('position_size_pct', cfg.POSITION_SIZE_PCT):.0%}/par"
@@ -297,6 +302,49 @@ def main():
         st.session_state["nw_style_filter"] = active_style
 
     with st.sidebar:
+        st.header("Control del bot")
+        saved_strats = list_strategies()
+        strat_labels = ["— Estilo base (sin estrategia guardada) —"]
+        strat_id_map: dict[str, int | None] = {strat_labels[0]: None}
+        active_sid = get_active_strategy_id() or status.get("active_strategy_id")
+        default_idx = 0
+        for s in saved_strats:
+            label = f"{s['name']} ({s.get('timeframe', '?')})"
+            strat_labels.append(label)
+            strat_id_map[label] = s["id"]
+            if active_sid and s["id"] == int(active_sid):
+                default_idx = len(strat_labels) - 1
+
+        pick = st.selectbox(
+            "Estrategia en vivo",
+            strat_labels,
+            index=default_idx,
+            help="El bot leerá parámetros y timeframe de la estrategia guardada en SQLite.",
+        )
+        bc1, bc2 = st.columns(2)
+        with bc1:
+            if st.button("Aplicar estrategia", type="primary", use_container_width=True):
+                msg = apply_operating_strategy(strat_id_map[pick])
+                st.success(msg.replace("\n", " · "))
+                st.rerun()
+        with bc2:
+            if status.get("pause_until") and not status.get("bot_killed"):
+                if st.button("Quitar pausa", use_container_width=True):
+                    RiskManager(cfg.MAX_CAPITAL_USDT).clear_pause()
+                    st.success("Pausa eliminada. El bot operará en la próxima vela.")
+                    st.rerun()
+            elif status.get("bot_killed"):
+                if st.button("Reset kill switch", use_container_width=True):
+                    RiskManager(cfg.MAX_CAPITAL_USDT).reset_kill()
+                    st.warning("Kill switch reseteado. Revisa que el drawdown sea aceptable.")
+                    st.rerun()
+
+        if active_sid and status.get("active_strategy_name"):
+            st.caption(f"Operando: **{status['active_strategy_name']}**")
+        elif not saved_strats:
+            st.caption("Guarda estrategias en la pestaña **Backtest & Estrategias**.")
+
+        st.divider()
         st.header("Filtros")
         st.info(
             f"**Telegram:** {STYLE_LABELS.get(active_style, active_style)} · "
@@ -432,7 +480,10 @@ def main():
     if status.get("bot_killed"):
         st.error(f"Kill switch activo: {status.get('kill_reason', '—')}")
     elif status.get("pause_until"):
-        st.warning(f"Bot en pausa hasta: {status.get('pause_until')}")
+        st.warning(
+            f"Bot en pausa hasta: {status.get('pause_until')} · "
+            f"{status.get('pause_reason') or '—'}"
+        )
 
     # ── KPIs ──────────────────────────────────────────────
     open_count = len(open_df)

@@ -15,10 +15,10 @@ import config as cfg
 from bot.database      import (init_db, get_active_params, save_param_set,
                                 save_signal, save_trade, get_open_trade,
                                 get_open_trades, close_trade, get_state, set_state,
-                                get_recent_trades, update_trade_stop_loss)
+                                get_recent_trades, update_trade_stop_loss, get_strategy)
 from bot.data_fetcher  import (fetch_ohlcv, fetch_balance, fetch_base_balance,
                                 fetch_current_price)
-from bot.signal_engine import compute_all, get_signal
+from bot.live_signals  import build_market_state, get_trading_signal, use_trailing_exit
 from bot.order_manager import (place_market_buy, place_market_sell, check_exit_conditions,
                                 calc_trade_pnl, compute_trailing_stop, trade_side)
 from bot.risk_manager  import RiskManager
@@ -32,6 +32,7 @@ from bot.telegram_notifier import (notify_start, notify_signal, notify_trade_ope
                                     notify_trade_close, notify_trail_update,
                                     notify_kill_switch, notify_optimization,
                                     notify_daily_summary, send as tg_send)
+from bot.strategy_types import apply_strategy_type_params
 from bot.pairs import (
     bar_state_keys, calc_order_capital, can_open_new_trade,
     symbol_quote_asset, unique_quote_assets,
@@ -52,9 +53,27 @@ risk_manager = RiskManager(cfg.MAX_CAPITAL_USDT)
 
 def get_params() -> dict:
     rt = get_runtime()
+    strategy_id = get_state("active_strategy_id")
+    if strategy_id:
+        strat = get_strategy(strategy_id=int(strategy_id))
+        if strat:
+            params = apply_strategy_type_params(strat["params"].copy(), strat["strategy_type"])
+            return params
     sync_params(rt)
     params = get_active_params()
     return params if params else rt.signal_params.copy()
+
+
+def _notify_kill_once(reason: str) -> None:
+    """Evita spam de Telegram: una sola notificación por evento de pausa/kill."""
+    if get_state("bot_killed"):
+        key = get_state("kill_reason") or reason
+    else:
+        key = get_state("pause_reason") or reason.split(" (")[0]
+    if get_state("kill_notify_sent") == key:
+        return
+    notify_kill_switch(reason)
+    set_state("kill_notify_sent", key)
 
 
 def _persist_bar_state(prefix: str, symbol: str,
@@ -96,7 +115,7 @@ def _process_symbol_candle_close(symbol: str, rt, mode: str, params: dict):
         return
 
     try:
-        state = compute_all(df_ltf, df_htf, params)
+        state = build_market_state(df_ltf, df_htf, params)
     except Exception as e:
         logger.error(f"[{symbol}] Error en signal_engine: {e}")
         return
@@ -141,7 +160,7 @@ def _process_symbol_candle_close(symbol: str, rt, mode: str, params: dict):
         open_trade = get_open_trade(mode=mode, symbol=symbol)
         has_pos = open_trade is not None
 
-        signal = get_signal(
+        signal = get_trading_signal(
             state, params, last_long_bar, last_short_bar,
             current_bar, open_trade)
         signal_rec["direction"] = signal
@@ -182,7 +201,7 @@ def _process_symbol_candle_close(symbol: str, rt, mode: str, params: dict):
         _persist_bar_state("", symbol, current_bar, last_long_bar, last_short_bar)
     else:
         open_trade = get_open_trade(mode="shadow", symbol=symbol)
-        signal = get_signal(
+        signal = get_trading_signal(
             state, params, shadow_last_long, shadow_last_short,
             shadow_bar, open_trade)
         signal_rec["direction"] = signal
@@ -211,7 +230,7 @@ def on_candle_close():
     equity = _estimate_equity(mode)
     should_stop, reason = risk_manager.check_kill_switch(equity, mode)
     if should_stop:
-        notify_kill_switch(reason)
+        _notify_kill_once(reason)
         return
 
     for symbol in cfg.TRADING_PAIRS:
@@ -240,16 +259,17 @@ def _manage_open_position(open_trade, state, price, mode, symbol, params):
     side      = trade_side(open_trade)
 
     old_sl = open_trade["stop_loss"]
-    new_sl = compute_trailing_stop(trail_lv, atr_val, side)
-    should_update = (
-        (side == "short" and new_sl < old_sl) or
-        (side == "long" and new_sl > old_sl)
-    )
-    if should_update:
-        if update_trade_stop_loss(open_trade["trade_id"], new_sl):
-            if mode == "live":
-                notify_trail_update(old_sl, new_sl, symbol)
-            open_trade["stop_loss"] = new_sl
+    if use_trailing_exit(params):
+        new_sl = compute_trailing_stop(trail_lv, atr_val, side)
+        should_update = (
+            (side == "short" and new_sl < old_sl) or
+            (side == "long" and new_sl > old_sl)
+        )
+        if should_update:
+            if update_trade_stop_loss(open_trade["trade_id"], new_sl):
+                if mode == "live":
+                    notify_trail_update(old_sl, new_sl, symbol)
+                open_trade["stop_loss"] = new_sl
 
     exit_reason = check_exit_conditions(
         price, open_trade, trail_lv, trail_dir, score=sc, params=params)
